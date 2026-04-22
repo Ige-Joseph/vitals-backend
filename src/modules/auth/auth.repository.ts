@@ -2,7 +2,6 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 export const authRepository = {
-  // ─── User ───────────────────────────────────────────────────────────
   findUserByEmail(email: string, tx?: Prisma.TransactionClient) {
     const client = tx ?? prisma;
     return client.user.findUnique({
@@ -14,6 +13,16 @@ export const authRepository = {
     const client = tx ?? prisma;
     return client.user.findUnique({
       where: { id },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        planType: true,
+        emailVerified: true,
+        isActive: true,
+      },
     });
   },
 
@@ -53,7 +62,6 @@ export const authRepository = {
     });
   },
 
-  // ─── Refresh tokens ─────────────────────────────────────────────────
   createRefreshToken(
     data: { userId: string; tokenHash: string; expiresAt: Date },
     tx?: Prisma.TransactionClient,
@@ -86,7 +94,6 @@ export const authRepository = {
     });
   },
 
-  // ─── Verification tokens ────────────────────────────────────────────
   createVerificationToken(
     data: { userId: string; tokenHash: string; expiresAt: Date },
     tx?: Prisma.TransactionClient,
@@ -122,7 +129,6 @@ export const authRepository = {
     });
   },
 
-  // ─── Password reset tokens ───────────────────────────────────────────
   createPasswordResetToken(
     data: { userId: string; tokenHash: string; expiresAt: Date },
     tx?: Prisma.TransactionClient,

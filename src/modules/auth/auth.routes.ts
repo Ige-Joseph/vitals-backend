@@ -223,7 +223,7 @@ router.post('/logout', authController.logout);
  *   get:
  *     tags: [Auth]
  *     summary: Get current authenticated user
- *     description: Returns the authenticated user payload from the access token.
+ *     description: Returns the authenticated user's core identity and auth state.
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -232,7 +232,20 @@ router.post('/logout', authController.logout);
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/ApiResponse'
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Authenticated
+ *                 data:
+ *                   $ref: '#/components/schemas/AuthUser'
+ *                 errorCode:
+ *                   type: string
+ *                   nullable: true
+ *                   example: null
  *       401:
  *         description: Unauthorized
  *         content:

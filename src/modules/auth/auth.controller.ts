@@ -65,6 +65,7 @@ export const authController = {
       const message = result.alreadyVerified
         ? 'Email already verified'
         : 'Email verified successfully';
+
       return ok(res, null, message);
     } catch (err) {
       next(err);
@@ -126,7 +127,8 @@ export const authController = {
 
   async me(req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
-      return ok(res, req.user, 'Authenticated');
+      const user = await authService.getCurrentUser(req.user!.sub);
+      return ok(res, user, 'Authenticated');
     } catch (err) {
       next(err);
     }

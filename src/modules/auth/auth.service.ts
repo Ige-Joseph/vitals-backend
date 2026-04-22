@@ -393,6 +393,25 @@ export const authService = {
 
     log.info('Password reset completed', { userId: record.userId });
   },
+
+
+
+    async getCurrentUser(userId: string) {
+    const user = await authRepository.findUserById(userId);
+    if (!user) {
+      throw AppError.notFound('User not found');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+      planType: user.planType,
+      emailVerified: user.emailVerified,
+    };
+  },
 };
 
 
