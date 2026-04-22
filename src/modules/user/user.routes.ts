@@ -35,16 +35,34 @@ router.get('/profile', userController.getProfile);
  *           schema:
  *             type: object
  *             properties:
+ *               firstName:
+ *                 type: string
+ *                 example: Joseph
+ *               lastName:
+ *                 type: string
+ *                 example: Ige
  *               gender:
  *                 type: string
  *                 enum: [MALE, FEMALE, NON_BINARY, PREFER_NOT_TO_SAY]
+ *               country:
+ *                 type: string
+ *                 example: Nigeria
  *               timezone:
  *                 type: string
+ *                 example: Africa/Lagos
  *               selectedJourney:
  *                 type: string
  *                 enum: [MEDICATION, PREGNANCY, VACCINATION]
  *               notificationPreferences:
  *                 type: object
+ *                 properties:
+ *                   pushEnabled:
+ *                     type: boolean
+ *                   emailEnabled:
+ *                     type: boolean
+ *                   reminderChannel:
+ *                     type: string
+ *                     enum: [PUSH, EMAIL, BOTH]
  *     responses:
  *       200:
  *         description: Profile updated

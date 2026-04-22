@@ -6,10 +6,19 @@ import { ok } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
 
 const updateProfileSchema = z.object({
+  firstName: z.string().min(1).max(100).optional(),
+  lastName: z.string().min(1).max(100).optional(),
   gender: z.enum(['MALE', 'FEMALE', 'NON_BINARY', 'PREFER_NOT_TO_SAY']).optional(),
+  country: z.string().max(100).optional(),
   timezone: z.string().optional(),
   selectedJourney: z.enum(['MEDICATION', 'PREGNANCY', 'VACCINATION']).optional(),
-  notificationPreferences: z.record(z.string(), z.unknown()).optional(),
+  notificationPreferences: z
+    .object({
+      pushEnabled: z.boolean().optional(),
+      emailEnabled: z.boolean().optional(),
+      reminderChannel: z.enum(['PUSH', 'EMAIL', 'BOTH']).optional(),
+    })
+    .optional(),
 });
 
 export const userController = {
