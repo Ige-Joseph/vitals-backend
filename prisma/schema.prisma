@@ -1,0 +1,493 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum PlanType {
+  FREE
+  PREMIUM
+}
+
+
+enum Gender {
+  MALE
+  FEMALE
+  NON_BINARY
+  PREFER_NOT_TO_SAY
+}
+
+enum Journey {
+  MEDICATION
+  PREGNANCY
+  VACCINATION
+}
+
+enum CarePlanType {
+  MEDICATION
+  PREGNANCY
+  VACCINATION
+}
+
+enum CarePlanStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+enum CareEventStatus {
+  PENDING
+  DONE
+  SKIPPED
+  MISSED
+}
+
+enum ReminderChannel {
+  EMAIL
+  PUSH
+}
+
+enum ReminderStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum NotificationAttemptType {
+  PUSH_PRIMARY
+  FALLBACK_EMAIL
+}
+
+enum NotificationAttemptStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum OutboxEventType {
+  EMAIL_VERIFICATION
+  MEDICATION_FALLBACK_EMAIL
+  PASSWORD_RESET
+  WELCOME_EMAIL
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum ArticleCategory {
+  GENERAL
+  PREGNANCY
+  BABY_CARE
+  MEDICATION
+  NUTRITION
+  MENTAL_HEALTH
+}
+
+// ─────────────────────────────────────────────
+// Auth & User
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  firstName     String?
+  lastName      String?
+  passwordHash  String
+  role          Role      @default(USER)
+  planType      PlanType  @default(FREE)
+  emailVerified Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  passwordResetTokens PasswordResetToken[]
+
+  // Relations
+  profile                  Profile?
+  carePlans                CarePlan[]
+  activityLogs             ActivityLog[]
+  symptomLogs              SymptomLog[]
+  drugDetections           DrugDetection[]
+  moodLogs                 MoodLog[]
+  dailyUsage               DailyUsage[]
+  pushSubscriptions        PushSubscription[]
+  pushTokens               PushToken[]
+  refreshTokens            RefreshToken[]
+  emailVerificationTokens  EmailVerificationToken[]
+  outboxEvents             OutboxEvent[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id          String    @id @default(uuid())
+  userId      String
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+
+model PasswordResetToken {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ─────────────────────────────────────────────
+// Profile
+// ─────────────────────────────────────────────
+
+model Profile {
+  id                      String    @id @default(uuid())
+  userId                  String    @unique
+  gender                  Gender?
+  country                 String?
+  timezone                String    @default("Africa/Lagos")
+  notificationPreferences Json      @default("{}")
+  selectedJourney         Journey?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+// ─────────────────────────────────────────────
+// Care Engine
+// ─────────────────────────────────────────────
+
+model CarePlan {
+  id        String         @id @default(uuid())
+  userId    String
+  type      CarePlanType
+  title     String
+  status    CarePlanStatus @default(ACTIVE)
+  metadata  Json           @default("{}")
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  careEvents         CareEvent[]
+  medication         Medication?
+  pregnancyProfile   PregnancyProfile?
+
+  @@index([userId, status])
+  @@index([userId, type])
+  @@map("care_plans")
+}
+
+model CareEvent {
+  id           String          @id @default(uuid())
+  carePlanId   String
+  eventType    String
+  title        String
+  description  String?
+  scheduledFor DateTime
+  status       CareEventStatus @default(PENDING)
+  metadata     Json            @default("{}")
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  carePlan   CarePlan    @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  reminders  Reminder[]
+
+  @@index([carePlanId, status])
+  @@index([scheduledFor])
+  @@map("care_events")
+}
+
+model Reminder {
+  id             String         @id @default(uuid())
+  careEventId    String
+  channel        ReminderChannel
+  sendAt         DateTime
+  status         ReminderStatus @default(PENDING)
+  retryCount     Int            @default(0)
+  lastAttemptAt  DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  processedAt    DateTime?
+  errorMessage   String?
+
+  careEvent             CareEvent              @relation(fields: [careEventId], references: [id], onDelete: Cascade)
+  notificationAttempts  NotificationAttempt[]
+
+  @@index([sendAt, status])
+  @@map("reminders")
+}
+
+model NotificationAttempt {
+  id             String                     @id @default(uuid())
+  reminderId     String
+  channel        ReminderChannel
+  type           NotificationAttemptType
+  status         NotificationAttemptStatus
+  idempotencyKey String                     @unique
+  attemptedAt    DateTime                   @default(now())
+  errorMessage   String?
+
+  reminder  Reminder  @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+
+  @@index([reminderId])
+  @@map("notification_attempts")
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// ─────────────────────────────────────────────
+// Outbox
+// ─────────────────────────────────────────────
+
+model OutboxEvent {
+  id            String            @id @default(uuid())
+  userId        String?
+  type          OutboxEventType
+  payload       Json
+  status        OutboxEventStatus @default(PENDING)
+  retryCount    Int               @default(0)
+  lastAttemptAt DateTime?
+  processedAt   DateTime?
+  errorMessage  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+// ─────────────────────────────────────────────
+// Medications
+// ─────────────────────────────────────────────
+
+model Medication {
+  id           String   @id @default(uuid())
+  carePlanId   String   @unique
+  name         String
+  dosage       String
+  frequency    String
+  startDate    DateTime
+  endDate      DateTime?
+  instructions String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  carePlan  CarePlan  @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+
+  @@map("medications")
+}
+
+// ─────────────────────────────────────────────
+// Mother & Baby
+// ─────────────────────────────────────────────
+
+model PregnancyProfile {
+  id                    String   @id @default(uuid())
+  carePlanId            String   @unique
+  lmpDate               DateTime
+  pregnancyWeekAtSetup  Int
+  currentWeek           Int
+  trimester             Int
+  expectedDeliveryDate  DateTime
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  carePlan  CarePlan  @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+
+  @@map("pregnancy_profiles")
+}
+
+// ─────────────────────────────────────────────
+// Mood & Cravings
+// ─────────────────────────────────────────────
+
+model MoodLog {
+  id        String   @id @default(uuid())
+  userId    String
+  mood      String?
+  craving   String?
+  insight   String?
+  loggedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, loggedAt])
+  @@map("mood_logs")
+}
+
+// ─────────────────────────────────────────────
+// Symptom Checker
+// ─────────────────────────────────────────────
+
+model SymptomLog {
+  id           String   @id @default(uuid())
+  userId       String
+  symptomsText String
+  severity     String?
+  aiResponse   Json?
+  createdAt    DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("symptom_logs")
+}
+
+// ─────────────────────────────────────────────
+// Drug Detection
+// ─────────────────────────────────────────────
+
+model DrugDetection {
+  id           String   @id @default(uuid())
+  userId       String
+  imageUrl     String
+  detectedDrug String?
+  aiResponse   Json?
+  createdAt    DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("drug_detections")
+}
+
+// ─────────────────────────────────────────────
+// AI Quota
+// ─────────────────────────────────────────────
+
+model DailyUsage {
+  id                  String   @id @default(uuid())
+  userId              String
+  date                DateTime @db.Date
+  symptomChecksUsed   Int      @default(0)
+  drugDetectionsUsed  Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("daily_usage")
+}
+
+// ─────────────────────────────────────────────
+// Push Subscriptions (legacy Web Push)
+// ─────────────────────────────────────────────
+
+model PushSubscription {
+  id          String   @id @default(uuid())
+  userId      String
+  endpoint    String   @unique
+  p256dhKey   String
+  authKey     String
+  deviceInfo  Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// ─────────────────────────────────────────────
+// FCM Push Tokens
+// ─────────────────────────────────────────────
+
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_tokens")
+}
+
+// ─────────────────────────────────────────────
+// Articles
+// ─────────────────────────────────────────────
+
+model Article {
+  id           String          @id @default(uuid())
+  title        String
+  slug         String          @unique
+  excerpt      String
+  content      String
+  imageUrl     String?
+  category     ArticleCategory @default(GENERAL)
+  isPublished  Boolean         @default(false)
+  publishedAt  DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([category, isPublished])
+  @@index([slug])
+  @@map("articles")
+}

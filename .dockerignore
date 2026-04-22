@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+*.env.local
+.git
+.github
+coverage
+*.test.ts
+tests/
+*.md
+.DS_Store
+fly.*.toml
+docker-compose*.yml
