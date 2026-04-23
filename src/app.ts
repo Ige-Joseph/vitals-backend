@@ -29,6 +29,9 @@ const log = createLogger('app');
 export const createApp = () => {
   const app = express();
 
+  // Trust Fly.io / reverse proxy so rate limiting and client IPs work correctly
+  app.set('trust proxy', 1);
+
   // ─────────────────────────────────────────────
   // Security middleware
   // ─────────────────────────────────────────────
