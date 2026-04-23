@@ -4,11 +4,7 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('redis');
 
-const fallbackConfig: RedisOptions = {
-  host: env.REDIS_HOST!,
-  port: env.REDIS_PORT!,
-  password: env.REDIS_PASSWORD!,
-  tls: env.REDIS_TLS ? {} : undefined,
+const commonOptions: RedisOptions = {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
   retryStrategy: (times: number) => {
@@ -21,8 +17,16 @@ const fallbackConfig: RedisOptions = {
 };
 
 export const redisConnection = env.UPSTASH_REDIS_URL
-  ? new IORedis(env.UPSTASH_REDIS_URL)
-  : new IORedis(fallbackConfig);
+  ? new IORedis(env.UPSTASH_REDIS_URL, {
+      ...commonOptions,
+    })
+  : new IORedis({
+      host: env.REDIS_HOST!,
+      port: env.REDIS_PORT!,
+      password: env.REDIS_PASSWORD!,
+      tls: env.REDIS_TLS ? {} : undefined,
+      ...commonOptions,
+    });
 
 redisConnection.on('connect', () => log.info('Redis connected'));
 redisConnection.on('close', () => log.warn('Redis connection closed'));
