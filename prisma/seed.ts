@@ -47,23 +47,28 @@ async function main() {
   if (!existingDemo) {
     const passwordHash = await bcrypt.hash(demoPassword, BCRYPT_ROUNDS);
 
-    await prisma.user.create({
-      data: {
-        email: demoEmail,
-        passwordHash,
-        role: 'USER',
-        planType: 'FREE',
-        emailVerified: true,
-        profile: {
-          create: {
-            sex: 'FEMALE',
-            timezone: 'Africa/Lagos',
-            selectedJourney: 'PREGNANCY',
-            notificationPreferences: {},
-          },
+  await prisma.user.create({
+    data: {
+      email: demoEmail,
+      passwordHash,
+      role: 'USER',
+      planType: 'FREE',
+      emailVerified: true,
+      profile: {
+        create: {
+          gender: 'FEMALE',
+          country: 'Nigeria',
+          timezone: 'Africa/Lagos',
+          selectedJourney: 'PREGNANCY',
+          notificationPreferences: {
+              pushEnabled: true,
+              emailEnabled: true,
+              reminderChannel: 'PUSH',
+            }
         },
       },
-    });
+    },
+  });
 
     console.log(`✅ Demo user created: ${demoEmail}`);
   } else {
