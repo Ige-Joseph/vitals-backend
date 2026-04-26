@@ -192,8 +192,18 @@ export const getTrimester = (week: number): 1 | 2 | 3 => {
 
 export const getWeekFromLMP = (lmpDate: Date): number => {
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-  const diff = Date.now() - lmpDate.getTime();
-  return Math.floor(diff / msPerWeek);
+
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const lmp = new Date(lmpDate);
+  lmp.setHours(0, 0, 0, 0);
+
+  const diff = now.getTime() - lmp.getTime();
+
+  const week = Math.floor(diff / msPerWeek) + 1;
+
+  return Math.min(Math.max(week, 1), 42);
 };
 
 export const getEDD = (lmpDate: Date): Date => {
@@ -204,7 +214,7 @@ export const getEDD = (lmpDate: Date): Date => {
 
 export const getLMPFromWeek = (pregnancyWeek: number): Date => {
   const lmp = new Date();
-  lmp.setDate(lmp.getDate() - pregnancyWeek * 7);
+  lmp.setDate(lmp.getDate() - (pregnancyWeek - 1) * 7);
   return lmp;
 };
 
@@ -214,5 +224,5 @@ export const getGuidanceForWeek = (week: number): WeeklyGuidance | undefined =>
   );
 
 // Filter ANC milestones to only those not yet passed given current week
-export const getRemainingANCMilestones = (currentWeek: number): ANCMilestone[] =>
-  ANC_MILESTONES.filter((m) => m.weekNumber > currentWeek);
+export const getRemainingANCMilestones = (currentWeek: number) =>
+  ANC_MILESTONES.filter((m) => m.weekNumber >= currentWeek);

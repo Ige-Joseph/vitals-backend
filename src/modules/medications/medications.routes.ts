@@ -14,7 +14,15 @@ router.use(authenticate);
  *   post:
  *     tags: [Medications]
  *     summary: Create a medication plan and generate dose schedule
- *     description: Creates a medication care plan, stores the medication details, and generates scheduled dose events through the shared care engine.
+ *     description: |
+ *       Creates a medication care plan, stores the medication details, generates all scheduled dose events, and creates reminders through the shared care engine.
+ *
+ *       Rules:
+ *       - Provide either durationDays or endDate, but not both.
+ *       - customTimes must match frequency:
+ *         - ONCE_DAILY = 1 time
+ *         - TWICE_DAILY = 2 times
+ *         - THREE_TIMES_DAILY = 3 times
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -38,11 +46,11 @@ router.use(authenticate);
  *               startDate:
  *                 type: string
  *                 format: date
- *                 example: 2026-04-20
+ *                 example: "2026-04-20"
  *               endDate:
  *                 type: string
  *                 format: date
- *                 example: 2026-04-26
+ *                 example: "2026-04-26"
  *                 description: Provide either endDate or durationDays, but not both.
  *               durationDays:
  *                 type: integer
@@ -65,7 +73,7 @@ router.use(authenticate);
  *                 name: Paracetamol
  *                 dosage: 500mg
  *                 frequency: ONCE_DAILY
- *                 startDate: 2026-04-20
+ *                 startDate: "2026-04-20"
  *                 durationDays: 7
  *                 customTimes: ["08:00"]
  *                 instructions: Take after food
@@ -75,18 +83,20 @@ router.use(authenticate);
  *                 name: Amoxicillin
  *                 dosage: 250mg
  *                 frequency: TWICE_DAILY
- *                 startDate: 2026-04-20
+ *                 startDate: "2026-04-20"
  *                 durationDays: 5
  *                 customTimes: ["08:00", "20:00"]
+ *                 instructions: Take morning and evening after meals
  *             threeTimesDaily:
  *               summary: Three times daily medication
  *               value:
  *                 name: Vitamin C
  *                 dosage: 1000mg
  *                 frequency: THREE_TIMES_DAILY
- *                 startDate: 2026-04-20
- *                 endDate: 2026-04-25
+ *                 startDate: "2026-04-20"
+ *                 durationDays: 5
  *                 customTimes: ["08:00", "14:00", "20:00"]
+ *                 instructions: Take after meals
  *     responses:
  *       201:
  *         description: Medication plan created with schedule
@@ -110,7 +120,7 @@ router.use(authenticate);
  *                       type: object
  *                     scheduledDoses:
  *                       type: integer
- *                       example: 14
+ *                       example: 10
  *                 errorCode:
  *                   type: string
  *                   nullable: true
@@ -173,6 +183,46 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
   }
 });
 
+
+
+
+/**
+ * @swagger
+ * /medications/{carePlanId}/history:
+ *   get:
+ *     tags: [Medications]
+ *     summary: Get medication dose history
+ *     description: "Returns the full dose history for a medication plan, including past, current, and future doses with status: PENDING, DONE, SKIPPED, or MISSED."
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: carePlanId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Medication dose history retrieved
+ */
+router.get(
+  '/:carePlanId/history',
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const carePlanId = req.params.carePlanId as string;
+
+      const history = await medicationsService.getMedicationHistory(
+        req.user!.sub,
+        carePlanId,
+      );
+
+      return ok(res, history, 'Medication history retrieved');
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 /**
  * @swagger
  * /medications/{carePlanId}:
@@ -217,6 +267,7 @@ router.get('/:carePlanId', async (req: AuthenticatedRequest, res: Response, next
     next(err);
   }
 });
+
 
 /**
  * @swagger

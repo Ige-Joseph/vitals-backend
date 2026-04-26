@@ -296,4 +296,27 @@ export const careRepository = {
       take: limit,
     });
   },
+
+
+
+  listEventsByCarePlan(carePlanId: string, userId: string) {
+    return prisma.careEvent.findMany({
+      where: {
+        carePlanId,
+        carePlan: { userId },
+      },
+      orderBy: { scheduledFor: 'desc' },
+      include: {
+        reminders: true,
+        carePlan: {
+          select: {
+            id: true,
+            type: true,
+            title: true,
+            status: true,
+          },
+        },
+      },
+    });
+  },
 };

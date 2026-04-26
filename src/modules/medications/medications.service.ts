@@ -9,6 +9,7 @@ import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
 
 const log = createLogger('medications-service');
+const FREE_MEDICATION_PLAN_LIMIT = 5;
 
 export interface CreateMedicationInput {
   name: string;
@@ -32,6 +33,18 @@ const parseDateOnly = (value: string, fieldName: string): Date => {
 export const medicationsService = {
   async createMedication(userId: string, input: CreateMedicationInput) {
     const startDate = parseDateOnly(input.startDate, 'startDate');
+
+
+    
+
+      const activeMedicationCount = await medicationRepository.countActiveByUser(userId);
+
+      if (activeMedicationCount >= FREE_MEDICATION_PLAN_LIMIT) {
+        throw AppError.badRequest(
+          `You can only create up to ${FREE_MEDICATION_PLAN_LIMIT} active medication plans for now`,
+        );
+      }
+
 
     let endDate: Date;
     if (input.endDate) {
@@ -64,55 +77,60 @@ export const medicationsService = {
       doses: schedule.length,
     });
 
-    const result = await prisma.$transaction(async (tx: PrismaTx) => {
-      const carePlan = await careRepository.createCarePlan(
-        {
-          userId,
-          type: 'MEDICATION',
-          title: `${input.name} — ${input.dosage}`,
-          metadata: {
-            frequency: input.frequency,
-            customTimes: input.customTimes ?? null,
+    const result = await prisma.$transaction(
+      async (tx: PrismaTx) => {
+        const carePlan = await careRepository.createCarePlan(
+          {
+            userId,
+            type: 'MEDICATION',
+            title: `${input.name} — ${input.dosage}`,
+            metadata: {
+              frequency: input.frequency,
+              customTimes: input.customTimes ?? null,
+            },
           },
-        },
-        tx,
-      );
+          tx,
+        );
 
-      const medication = await medicationRepository.create(
-        {
-          carePlanId: carePlan.id,
-          name: input.name,
-          dosage: input.dosage,
-          frequency: input.frequency,
-          startDate,
-          endDate,
-          instructions: input.instructions,
-        },
-        tx,
-      );
-
-      await careService.scheduleEvents(carePlan.id, userId, schedule, tx);
-
-      await careRepository.createActivityLog(
-        {
-          userId,
-          type: 'MEDICATION_CREATED',
-          message: `Medication plan created: ${input.name}`,
-          metadata: {
+        const medication = await medicationRepository.create(
+          {
             carePlanId: carePlan.id,
-            doses: schedule.length,
+            name: input.name,
+            dosage: input.dosage,
             frequency: input.frequency,
+            startDate,
+            endDate,
+            instructions: input.instructions,
           },
-        },
-        tx,
-      );
+          tx,
+        );
 
-      return {
-        carePlan,
-        medication,
-        scheduledDoses: schedule.length,
-      };
-    });
+        await careService.scheduleEvents(carePlan.id, userId, schedule, tx);
+
+        await careRepository.createActivityLog(
+          {
+            userId,
+            type: 'MEDICATION_CREATED',
+            message: `Medication plan created: ${input.name}`,
+            metadata: {
+              carePlanId: carePlan.id,
+              doses: schedule.length,
+              frequency: input.frequency,
+            },
+          },
+          tx,
+        );
+
+        return {
+          carePlan,
+          medication,
+          scheduledDoses: schedule.length,
+        };
+      },
+      {
+        timeout: 15000,
+      },
+    );
 
     log.info('Medication plan created', {
       userId,
@@ -157,4 +175,13 @@ export const medicationsService = {
 
     log.info('Medication deactivated', { userId, carePlanId });
   },
+
+
+    async getMedicationHistory(userId: string, carePlanId: string) {
+    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+    if (!med) throw AppError.notFound('Medication not found');
+
+    return careRepository.listEventsByCarePlan(carePlanId, userId);
+  },
+
 };

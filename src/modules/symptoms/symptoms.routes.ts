@@ -10,9 +10,10 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('symptoms');
 const router = Router();
+
 router.use(authenticate);
 
-const SYSTEM_INSTRUCTION = `You are a non-diagnostic health information assistant for a maternal and general health app. 
+const SYSTEM_INSTRUCTION = `You are a non-diagnostic health information assistant for a maternal and general health app.
 You provide general health information and guidance only — never diagnoses or prescriptions.
 Always include a disclaimer that users should consult a healthcare professional.
 Respond ONLY with valid JSON — no markdown, no preamble.`;
@@ -29,9 +30,8 @@ interface SymptomResponse {
   seekCareIf: string[];
 }
 
-// Returned when Gemini fails, times out, or returns unusable output
 const SYMPTOM_FALLBACK: SymptomResponse = {
-  severity: 'low',
+  severity: 'moderate',
   summary: 'We were unable to complete a reliable health assessment right now.',
   guidance:
     'Please try again shortly. If your symptoms feel severe, urgent, or are getting worse, do not wait — visit a qualified doctor or seek immediate medical attention.',
@@ -50,6 +50,14 @@ const SYMPTOM_FALLBACK: SymptomResponse = {
  *   post:
  *     tags: [Symptoms]
  *     summary: AI-powered symptom check — returns structured guidance
+ *     description: |
+ *       Analyzes user-reported symptoms using AI and returns non-diagnostic general guidance.
+ *
+ *       Safety rules:
+ *       - This does not provide diagnosis or prescriptions.
+ *       - Users should consult a qualified healthcare professional.
+ *       - If AI fails or returns unusable output, the API returns a safe fallback response.
+ *       - Daily quota is enforced before the AI request.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -62,22 +70,42 @@ const SYMPTOM_FALLBACK: SymptomResponse = {
  *             properties:
  *               symptomsText:
  *                 type: string
+ *                 minLength: 3
+ *                 maxLength: 1000
  *                 example: I have had a headache and mild fever for 2 days
+ *           examples:
+ *             mildSymptoms:
+ *               summary: Mild symptoms
+ *               value:
+ *                 symptomsText: I have had a headache and mild fever for 2 days
+ *             urgentSymptoms:
+ *               summary: Potentially urgent symptoms
+ *               value:
+ *                 symptomsText: I have chest pain, shortness of breath, and dizziness
  *     responses:
- *       200:
- *         description: Symptom analysis result
+ *       201:
+ *         description: Symptom analysis result created
+ *       401:
+ *         description: Unauthorized
+ *       422:
+ *         description: Validation error
  *       429:
  *         description: Daily quota exceeded
  */
 router.post('/check', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const parsed = symptomSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues[0].message);
+    const parsedRequest = symptomSchema.safeParse(req.body);
+    if (!parsedRequest.success) {
+      return validationError(res, parsedRequest.error.issues[0].message);
+    }
 
-    // Enforce quota before calling AI — never trust client
-    await quotaService.checkAndIncrement(req.user!.sub, req.user!.planType, 'symptomCheck');
+    await quotaService.checkAndIncrement(
+      req.user!.sub,
+      req.user!.planType,
+      'symptomCheck',
+    );
 
-    const prompt = `A user reports the following symptoms: "${parsed.data.symptomsText}"
+    const prompt = `A user reports the following symptoms: "${parsedRequest.data.symptomsText}"
 
 Respond with a JSON object with exactly these fields:
 {
@@ -88,20 +116,24 @@ Respond with a JSON object with exactly these fields:
   "seekCareIf": ["list", "of", "warning", "signs", "to", "seek", "care"]
 }`;
 
-    // Attempt Gemini call — fall back gracefully on any failure
     let aiResponse: SymptomResponse = SYMPTOM_FALLBACK;
     let usedFallback = false;
 
     try {
       const rawResponse = await geminiProvider.generateText(prompt, SYSTEM_INSTRUCTION);
-      const parsed = geminiProvider.parseJsonSafe<SymptomResponse>(rawResponse);
+      const aiParsed = geminiProvider.parseJsonSafe<SymptomResponse>(rawResponse);
 
-      if (parsed && parsed.severity && parsed.summary && parsed.guidance) {
-        // Ensure disclaimer is always present
+      if (
+        aiParsed &&
+        ['low', 'moderate', 'high', 'emergency'].includes(aiParsed.severity) &&
+        aiParsed.summary &&
+        aiParsed.guidance &&
+        Array.isArray(aiParsed.seekCareIf)
+      ) {
         aiResponse = {
-          ...parsed,
+          ...aiParsed,
           disclaimer:
-            parsed.disclaimer ||
+            aiParsed.disclaimer ||
             'This is general information only and not a medical diagnosis. Please consult a qualified healthcare professional.',
         };
       } else {
@@ -118,11 +150,10 @@ Respond with a JSON object with exactly these fields:
       });
     }
 
-    // Persist — store fallback indicator in metadata so it's queryable later
     const symptomLog = await prisma.symptomLog.create({
       data: {
         userId: req.user!.sub,
-        symptomsText: parsed.data.symptomsText,
+        symptomsText: parsedRequest.data.symptomsText,
         severity: aiResponse.severity,
         aiResponse: { ...aiResponse, _fallback: usedFallback } as any,
       },
@@ -149,9 +180,22 @@ Respond with a JSON object with exactly these fields:
  *     summary: Fetch previous symptom checks
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           example: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           example: 10
  *     responses:
  *       200:
  *         description: Symptom check history
+ *       401:
+ *         description: Unauthorized
  */
 router.get('/history', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
@@ -177,7 +221,15 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response, next: Ne
 
     return ok(
       res,
-      { entries, pagination: { page, limit, total, pages: Math.ceil(total / limit) } },
+      {
+        entries,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
       'Symptom history retrieved',
     );
   } catch (err) {

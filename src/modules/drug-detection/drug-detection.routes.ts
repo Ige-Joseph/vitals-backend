@@ -2,7 +2,7 @@ import { Router, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { prisma } from '@/lib/prisma';
 import { authenticate } from '@/middleware/auth.middleware';
-import { ok, validationError, badRequest } from '@/lib/response';
+import { ok, created, badRequest } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
 import { geminiProvider } from '@/providers/ai/gemini.provider';
 import { quotaService } from '@/modules/usage/quota.service';
@@ -10,14 +10,15 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('drug-detection');
 const router = Router();
+
 router.use(authenticate);
 
-// Multer — memory storage, server-side only, 5MB max
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -39,7 +40,6 @@ interface DrugDetectionResponse {
   confidence: 'high' | 'moderate' | 'low' | 'unable_to_identify';
 }
 
-// Returned when Gemini fails, times out, or cannot read the image
 const DRUG_DETECTION_FALLBACK: DrugDetectionResponse = {
   drugName: 'Unknown',
   commonUsage: 'We could not analyze this image clearly right now.',
@@ -57,6 +57,15 @@ const DRUG_DETECTION_FALLBACK: DrugDetectionResponse = {
  *   post:
  *     tags: [Drug Detection]
  *     summary: Identify a drug from an uploaded image
+ *     description: |
+ *       Uses AI vision to identify a medication from an uploaded image.
+ *
+ *       Safety rules:
+ *       - This does not prescribe medication or dosage.
+ *       - Users should confirm with a qualified pharmacist or doctor.
+ *       - If the image is unclear or AI fails, the API returns a safe fallback response.
+ *       - Maximum image size is 5MB.
+ *       - Accepted formats: JPEG, PNG, WebP.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -70,9 +79,14 @@ const DRUG_DETECTION_FALLBACK: DrugDetectionResponse = {
  *               image:
  *                 type: string
  *                 format: binary
+ *                 description: Medication image. Max 5MB. JPEG, PNG, or WebP only.
  *     responses:
- *       200:
- *         description: Drug identification result
+ *       201:
+ *         description: Drug identification result created
+ *       400:
+ *         description: Missing or invalid image
+ *       401:
+ *         description: Unauthorized
  *       429:
  *         description: Daily quota exceeded
  */
@@ -83,7 +97,6 @@ router.post(
     try {
       if (!req.file) return badRequest(res, 'Image file is required');
 
-      // Enforce quota before sending to AI
       await quotaService.checkAndIncrement(
         req.user!.sub,
         req.user!.planType,
@@ -93,7 +106,8 @@ router.post(
       const base64 = req.file.buffer.toString('base64');
       const mimeType = req.file.mimetype;
 
-      const prompt = `Identify the medicine or drug in this image. 
+      const prompt = `Identify the medicine or drug in this image.
+
 Respond with a JSON object with exactly these fields:
 {
   "drugName": "name of the medication or 'Unknown' if cannot identify",
@@ -104,20 +118,25 @@ Respond with a JSON object with exactly these fields:
   "confidence": "high" | "moderate" | "low" | "unable_to_identify"
 }`;
 
-      // Attempt Gemini vision call — fall back gracefully on any failure
       let aiResponse: DrugDetectionResponse = DRUG_DETECTION_FALLBACK;
       let usedFallback = false;
 
       try {
         const rawResponse = await geminiProvider.analyzeImage(base64, mimeType, prompt);
-        const parsed = geminiProvider.parseJsonSafe<DrugDetectionResponse>(rawResponse);
+        const aiParsed = geminiProvider.parseJsonSafe<DrugDetectionResponse>(rawResponse);
 
-        if (parsed && parsed.drugName && parsed.confidence) {
-          // Ensure disclaimer is always present
+        if (
+          aiParsed &&
+          aiParsed.drugName &&
+          aiParsed.commonUsage &&
+          Array.isArray(aiParsed.sideEffects) &&
+          aiParsed.caution &&
+          ['high', 'moderate', 'low', 'unable_to_identify'].includes(aiParsed.confidence)
+        ) {
           aiResponse = {
-            ...parsed,
+            ...aiParsed,
             disclaimer:
-              parsed.disclaimer ||
+              aiParsed.disclaimer ||
               'This is general information only and not a medical diagnosis. Always consult a qualified pharmacist or doctor.',
           };
         } else {
@@ -137,7 +156,7 @@ Respond with a JSON object with exactly these fields:
       const detection = await prisma.drugDetection.create({
         data: {
           userId: req.user!.sub,
-          imageUrl: 'local-upload', // Replace with Cloudinary URL when integrated
+          imageUrl: 'local-upload',
           detectedDrug: aiResponse.drugName,
           aiResponse: { ...aiResponse, _fallback: usedFallback } as any,
         },
@@ -151,7 +170,11 @@ Respond with a JSON object with exactly these fields:
         detectionId: detection.id,
       });
 
-      return ok(res, { id: detection.id, ...aiResponse }, 'Drug detection complete');
+      return created(
+        res,
+        { id: detection.id, ...aiResponse },
+        'Drug detection complete',
+      );
     } catch (err) {
       next(err);
     }
@@ -166,9 +189,22 @@ Respond with a JSON object with exactly these fields:
  *     summary: Fetch previous drug detections
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           example: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           example: 10
  *     responses:
  *       200:
  *         description: Detection history
+ *       401:
+ *         description: Unauthorized
  */
 router.get('/history', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
@@ -193,7 +229,15 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response, next: Ne
 
     return ok(
       res,
-      { entries, pagination: { page, limit, total, pages: Math.ceil(total / limit) } },
+      {
+        entries,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
       'Detection history retrieved',
     );
   } catch (err) {

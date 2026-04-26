@@ -18,7 +18,15 @@ router.use(authenticate);
  *   post:
  *     tags: [Mother & Baby]
  *     summary: Create pregnancy care plan and generate ANC timeline
- *     description: Creates a pregnancy care plan, stores the pregnancy profile, and schedules only the remaining ANC milestones. Provide either lmpDate or pregnancyWeekAtSetup, but not both.
+ *     description: |
+ *       Creates a pregnancy care plan, stores the pregnancy profile, and schedules only the remaining ANC milestones.
+ *
+ *       Setup options:
+ *       - Option A: Provide lmpDate if the user knows the last menstrual period date.
+ *       - Option B: Provide pregnancyWeekAtSetup if the user only knows the current pregnancy week.
+ *
+ *       Provide either lmpDate OR pregnancyWeekAtSetup, but not both.
+ *       If both are provided, the request will be rejected.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -31,73 +39,23 @@ router.use(authenticate);
  *               lmpDate:
  *                 type: string
  *                 format: date
- *                 example: 2026-04-21
+ *                 example: "2026-04-21"
  *                 description: Last menstrual period date in YYYY-MM-DD format. Preferred input.
  *               pregnancyWeekAtSetup:
  *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 42
  *                 example: 12
  *                 description: Current pregnancy week. Use this only if lmpDate is not available.
  *           examples:
  *             usingLmpDate:
- *               summary: Setup using LMP date
+ *               summary: Option A — Setup using LMP date
  *               value:
- *                 lmpDate: 2026-04-21
+ *                 lmpDate: "2026-04-21"
  *             usingPregnancyWeek:
- *               summary: Setup using current pregnancy week
+ *               summary: Option B — Setup using current pregnancy week
  *               value:
  *                 pregnancyWeekAtSetup: 12
- *     responses:
- *       201:
- *         description: Pregnancy plan created with ANC schedule
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: Pregnancy plan created
- *                 data:
- *                   type: object
- *                   properties:
- *                     carePlan:
- *                       type: object
- *                     pregnancyProfile:
- *                       type: object
- *                     ancEventsScheduled:
- *                       type: integer
- *                       example: 5
- *                 errorCode:
- *                   type: string
- *                   nullable: true
- *                   example: null
- *       400:
- *         description: Invalid pregnancy input or calculated pregnancy week is out of valid range
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       401:
- *         description: Unauthorized
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       409:
- *         description: Active pregnancy already exists
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/setup', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
@@ -186,6 +144,40 @@ router.get('/timeline', async (req: AuthenticatedRequest, res: Response, next: N
   }
 });
 
+
+
+
+/**
+ * @swagger
+ * /mother-baby/pregnancy/cancel:
+ *   patch:
+ *     tags: [Mother & Baby]
+ *     summary: Cancel active pregnancy timeline
+ *     description: Cancels the current active pregnancy timeline so the user can set up a new one.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Pregnancy timeline cancelled
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: No active pregnancy timeline found
+ */
+router.patch('/pregnancy/cancel', async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await motherBabyService.cancelPregnancyTimeline(req.user!.sub);
+    return ok(res, result, 'Pregnancy timeline cancelled');
+  } catch (err) {
+    next(err);
+  }
+});
+
+
 /**
  * @swagger
  * /mother-baby/delivery:
@@ -206,11 +198,17 @@ router.get('/timeline', async (req: AuthenticatedRequest, res: Response, next: N
  *               deliveryDate:
  *                 type: string
  *                 format: date
- *                 example: 2026-04-21
+ *                 example: "2026-10-01"
  *                 description: Delivery date in YYYY-MM-DD format.
  *               babyName:
  *                 type: string
  *                 example: David
+ *           examples:
+ *             delivery:
+ *               summary: Record delivery
+ *               value:
+ *                 deliveryDate: "2026-10-01"
+ *                 babyName: David
  *     responses:
  *       201:
  *         description: Delivery recorded and vaccination schedule generated
@@ -291,7 +289,7 @@ router.post('/delivery', async (req: AuthenticatedRequest, res: Response, next: 
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Baby vaccination plans
+ *         description: Baby vaccination plans (empty array if none)
  *         content:
  *           application/json:
  *             schema:
@@ -313,12 +311,6 @@ router.post('/delivery', async (req: AuthenticatedRequest, res: Response, next: 
  *                   example: null
  *       401:
  *         description: Unauthorized
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       404:
- *         description: No baby profile found
  *         content:
  *           application/json:
  *             schema:
@@ -353,11 +345,17 @@ router.get('/baby-profile', async (req: AuthenticatedRequest, res: Response, nex
  *               deliveryDate:
  *                 type: string
  *                 format: date
- *                 example: 2026-04-21
+ *                 example: "2026-10-01"
  *                 description: Delivery date in YYYY-MM-DD format.
  *               babyName:
  *                 type: string
  *                 example: Sarah
+ *           examples:
+ *             standaloneBaby:
+ *               summary: Create standalone baby profile
+ *               value:
+ *                 deliveryDate: "2026-10-01"
+ *                 babyName: Sarah
  *     responses:
  *       201:
  *         description: Baby profile created with vaccination schedule

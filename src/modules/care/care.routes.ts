@@ -17,26 +17,43 @@ router.use(authenticate);
  *     parameters:
  *       - in: query
  *         name: status
+ *         required: false
  *         schema:
  *           type: string
  *           enum: [PENDING, DONE, SKIPPED, MISSED]
+ *         example: PENDING
+ *         description: Filter events by status
+ *
  *       - in: query
  *         name: type
+ *         required: false
  *         schema:
  *           type: string
+ *           enum: [MEDICATION_DOSE, ANC_VISIT, ANC_SCAN, VACCINATION]
+ *         example: MEDICATION_DOSE
+ *         description: Filter events by type
+ *
  *       - in: query
  *         name: from
+ *         required: false
  *         schema:
  *           type: string
  *           format: date-time
+ *         example: "2026-04-20T00:00:00.000Z"
+ *         description: Return events scheduled from this date (ISO 8601)
+ *
  *       - in: query
  *         name: to
+ *         required: false
  *         schema:
  *           type: string
  *           format: date-time
+ *         example: "2026-04-30T23:59:59.999Z"
+ *         description: Return events scheduled up to this date (ISO 8601)
+ *
  *     responses:
  *       200:
- *         description: Care event list
+ *         description: Care events retrieved successfully
  */
 router.get('/events', careController.listEvents);
 

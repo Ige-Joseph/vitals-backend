@@ -18,8 +18,10 @@ export const motherBabyRepository = {
     return client.pregnancyProfile.create({ data });
   },
 
-  findActivePregnancy(userId: string) {
-    return prisma.pregnancyProfile.findFirst({
+  findActivePregnancy(userId: string, tx?: PrismaTx) {
+    const client = tx ?? prisma;
+
+    return client.pregnancyProfile.findFirst({
       where: { carePlan: { userId, status: 'ACTIVE', type: 'PREGNANCY' } },
       include: { carePlan: true },
     });
@@ -70,5 +72,5 @@ export const motherBabyRepository = {
         },
       },
     });
-  },
+  }
 };

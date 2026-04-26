@@ -27,7 +27,10 @@ export interface GenerateScheduleInput {
 }
 
 /**
- * Generates an array of scheduled dose events for a medication plan.
+ * Generates all scheduled dose events for a medication plan.
+ * This includes past, current, and future doses so the app can keep
+ * a complete medication history of PENDING, DONE, SKIPPED, or MISSED doses.
+ *
  * Pure function — no DB calls. Driven entirely by medication.config.ts.
  */
 export const generateMedicationSchedule = (input: GenerateScheduleInput): ScheduledDose[] => {
@@ -48,6 +51,7 @@ export const generateMedicationSchedule = (input: GenerateScheduleInput): Schedu
   // Clamp end date to MAX_SCHEDULE_DAYS from start
   const maxEnd = new Date(startDate);
   maxEnd.setDate(maxEnd.getDate() + MAX_SCHEDULE_DAYS);
+
   const effectiveEnd = endDate < maxEnd ? endDate : maxEnd;
 
   const current = new Date(startDate);
@@ -57,10 +61,8 @@ export const generateMedicationSchedule = (input: GenerateScheduleInput): Schedu
     for (const time of times) {
       const dose = buildDose(new Date(current), time, medicationName, dosage, instructions);
 
-      // Only include doses from now onwards
-      if (dose.scheduledFor >= new Date()) {
-        doses.push(dose);
-      }
+      // Store all doses so history is complete
+      doses.push(dose);
     }
 
     current.setDate(current.getDate() + 1);
@@ -77,6 +79,7 @@ const buildDose = (
   instructions?: string,
 ): ScheduledDose => {
   const [hours, minutes] = time.split(':').map(Number);
+
   const scheduledFor = new Date(date);
   scheduledFor.setHours(hours, minutes, 0, 0);
 

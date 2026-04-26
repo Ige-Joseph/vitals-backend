@@ -78,49 +78,52 @@ export const motherBabyService = {
       };
     });
 
-    const result = await prisma.$transaction(async (tx: PrismaTx) => {
-      const carePlan = await careRepository.createCarePlan(
-        {
-          userId,
-          type: 'PREGNANCY',
-          title: `Pregnancy — EDD ${edd.toDateString()}`,
-          metadata: { lmpDate: lmpDate.toISOString(), edd: edd.toISOString() },
-        },
-        tx,
-      );
+    const result = await prisma.$transaction(
+      async (tx: PrismaTx) => {
+        const carePlan = await careRepository.createCarePlan(
+          {
+            userId,
+            type: 'PREGNANCY',
+            title: `Pregnancy — EDD ${edd.toDateString()}`,
+            metadata: { lmpDate: lmpDate.toISOString(), edd: edd.toISOString() },
+          },
+          tx,
+        );
 
-      const pregnancyProfile = await motherBabyRepository.createPregnancyProfile(
-        {
-          carePlanId: carePlan.id,
-          lmpDate,
-          pregnancyWeekAtSetup: currentWeek,
-          currentWeek,
-          trimester,
-          expectedDeliveryDate: edd,
-        },
-        tx,
-      );
-
-      await careService.scheduleEvents(carePlan.id, userId, ancEvents, tx);
-
-      await careRepository.createActivityLog(
-        {
-          userId,
-          type: 'PREGNANCY_STARTED',
-          message: `Pregnancy timeline started at week ${currentWeek}`,
-          metadata: {
+        const pregnancyProfile = await motherBabyRepository.createPregnancyProfile(
+          {
             carePlanId: carePlan.id,
+            lmpDate,
+            pregnancyWeekAtSetup: currentWeek,
             currentWeek,
             trimester,
-            edd: edd.toISOString(),
-            ancEventsScheduled: ancEvents.length,
+            expectedDeliveryDate: edd,
           },
-        },
-        tx,
-      );
+          tx,
+        );
 
-      return { carePlan, pregnancyProfile, ancEventsScheduled: ancEvents.length };
-    });
+        await careService.scheduleEvents(carePlan.id, userId, ancEvents, tx);
+
+        await careRepository.createActivityLog(
+          {
+            userId,
+            type: 'PREGNANCY_STARTED',
+            message: `Pregnancy timeline started at week ${currentWeek}`,
+            metadata: {
+              carePlanId: carePlan.id,
+              currentWeek,
+              trimester,
+              edd: edd.toISOString(),
+              ancEventsScheduled: ancEvents.length,
+            },
+          },
+          tx,
+        );
+
+        return { carePlan, pregnancyProfile, ancEventsScheduled: ancEvents.length };
+      },
+      { timeout: 20000 },
+    );
 
     log.info('Pregnancy setup complete', {
       userId,
@@ -203,51 +206,53 @@ export const motherBabyService = {
       };
     });
 
-    const result = await prisma.$transaction(async (tx: PrismaTx) => {
-      // Cancel pending reminders for pregnancy events before closing plan
-      const pregnancyEvents = await tx.careEvent.findMany({
-        where: {
-          carePlanId: activePregnancy.carePlanId,
-          status: 'PENDING',
+    const result = await prisma.$transaction(
+        async (tx: PrismaTx) => {
+          const pregnancyEvents = await tx.careEvent.findMany({
+            where: {
+              carePlanId: activePregnancy.carePlanId,
+              status: 'PENDING',
+            },
+            select: { id: true },
+          });
+
+          for (const event of pregnancyEvents) {
+            await careRepository.cancelRemindersByCareEvent(event.id, tx);
+          }
+
+          await careRepository.updateCarePlanStatus(activePregnancy.carePlanId, 'COMPLETED', tx);
+
+          const babyCarePlan = await careRepository.createCarePlan(
+            {
+              userId,
+              type: 'VACCINATION',
+              title: `${babyName} — Vaccination Schedule`,
+              metadata: { babyName, deliveryDate: deliveryDate.toISOString() },
+            },
+            tx,
+          );
+
+          await careService.scheduleEvents(babyCarePlan.id, userId, vaccinationEvents, tx);
+
+          await careRepository.createActivityLog(
+            {
+              userId,
+              type: 'DELIVERY_RECORDED',
+              message: `Delivery recorded. Baby vaccination plan created for ${babyName}.`,
+              metadata: {
+                pregnancyCarePlanId: activePregnancy.carePlanId,
+                babyCarePlanId: babyCarePlan.id,
+                deliveryDate: deliveryDate.toISOString(),
+                vaccinationsScheduled: vaccinationEvents.length,
+              },
+            },
+            tx,
+          );
+
+          return { babyCarePlan, vaccinationsScheduled: vaccinationEvents.length };
         },
-        select: { id: true },
-      });
-
-      for (const event of pregnancyEvents) {
-        await careRepository.cancelRemindersByCareEvent(event.id, tx);
-      }
-
-      await careRepository.updateCarePlanStatus(activePregnancy.carePlanId, 'COMPLETED', tx);
-
-      const babyCarePlan = await careRepository.createCarePlan(
-        {
-          userId,
-          type: 'VACCINATION',
-          title: `${babyName} — Vaccination Schedule`,
-          metadata: { babyName, deliveryDate: deliveryDate.toISOString() },
-        },
-        tx,
+        { timeout: 20000 },
       );
-
-      await careService.scheduleEvents(babyCarePlan.id, userId, vaccinationEvents, tx);
-
-      await careRepository.createActivityLog(
-        {
-          userId,
-          type: 'DELIVERY_RECORDED',
-          message: `Delivery recorded. Baby vaccination plan created for ${babyName}.`,
-          metadata: {
-            pregnancyCarePlanId: activePregnancy.carePlanId,
-            babyCarePlanId: babyCarePlan.id,
-            deliveryDate: deliveryDate.toISOString(),
-            vaccinationsScheduled: vaccinationEvents.length,
-          },
-        },
-        tx,
-      );
-
-      return { babyCarePlan, vaccinationsScheduled: vaccinationEvents.length };
-    });
 
     log.info('Delivery recorded, baby vaccination plan created', {
       userId,
@@ -262,7 +267,6 @@ export const motherBabyService = {
 
   async getBabyProfile(userId: string) {
     const plans = await motherBabyRepository.findAllBabyPlans(userId);
-    if (!plans.length) throw AppError.notFound('No baby profile found');
     return plans;
   },
 
@@ -292,38 +296,98 @@ export const motherBabyService = {
       };
     });
 
-    const result = await prisma.$transaction(async (tx: PrismaTx) => {
-      const babyCarePlan = await careRepository.createCarePlan(
-        {
-          userId,
-          type: 'VACCINATION',
-          title: `${babyName} — Vaccination Schedule`,
-          metadata: { babyName, deliveryDate: deliveryDate.toISOString(), standalone: true },
-        },
-        tx,
-      );
-
-      await careService.scheduleEvents(babyCarePlan.id, userId, vaccinationEvents, tx);
-
-      await careRepository.createActivityLog(
-        {
-          userId,
-          type: 'BABY_PROFILE_CREATED',
-          message: `Baby profile created for ${babyName}`,
-          metadata: {
-            babyCarePlanId: babyCarePlan.id,
-            vaccinationsScheduled: vaccinationEvents.length,
+    const result = await prisma.$transaction(
+      async (tx: PrismaTx) => {
+        const babyCarePlan = await careRepository.createCarePlan(
+          {
+            userId,
+            type: 'VACCINATION',
+            title: `${babyName} — Vaccination Schedule`,
+            metadata: { babyName, deliveryDate: deliveryDate.toISOString(), standalone: true },
           },
-        },
-        tx,
-      );
+          tx,
+        );
 
-      return { babyCarePlan, vaccinationsScheduled: vaccinationEvents.length };
-    });
+        await careService.scheduleEvents(babyCarePlan.id, userId, vaccinationEvents, tx);
+
+        await careRepository.createActivityLog(
+          {
+            userId,
+            type: 'BABY_PROFILE_CREATED',
+            message: `Baby profile created for ${babyName}`,
+            metadata: {
+              babyCarePlanId: babyCarePlan.id,
+              vaccinationsScheduled: vaccinationEvents.length,
+            },
+          },
+          tx,
+        );
+
+        return { babyCarePlan, vaccinationsScheduled: vaccinationEvents.length };
+      },
+      { timeout: 20000 },
+    );
 
     log.info('Standalone baby profile created', {
       userId,
       babyCarePlanId: result.babyCarePlan.id,
+    });
+
+    return result;
+  },
+
+  
+  async cancelPregnancyTimeline(userId: string) {
+    const activePregnancy = await motherBabyRepository.findActivePregnancy(userId);
+
+    if (!activePregnancy) {
+      throw AppError.notFound('No active pregnancy timeline found');
+    }
+
+    const result = await prisma.$transaction(
+      async (tx: PrismaTx) => {
+        const pregnancyEvents = await tx.careEvent.findMany({
+          where: {
+            carePlanId: activePregnancy.carePlanId,
+            status: 'PENDING',
+          },
+          select: { id: true },
+        });
+
+        for (const event of pregnancyEvents) {
+          await careRepository.cancelRemindersByCareEvent(event.id, tx);
+        }
+
+        const updatedCarePlan = await careRepository.updateCarePlanStatus(
+          activePregnancy.carePlanId,
+          'PAUSED',
+          tx,
+        );
+
+        await careRepository.createActivityLog(
+          {
+            userId,
+            type: 'PREGNANCY_CANCELLED',
+            message: 'Pregnancy timeline cancelled by user',
+            metadata: {
+              carePlanId: activePregnancy.carePlanId,
+              reason: 'USER_CANCELLED',
+            },
+          },
+          tx,
+        );
+
+        return {
+          carePlanId: updatedCarePlan.id,
+          status: updatedCarePlan.status,
+        };
+      },
+      { timeout: 20000 },
+    );
+
+    log.info('Pregnancy timeline cancelled', {
+      userId,
+      carePlanId: result.carePlanId,
     });
 
     return result;

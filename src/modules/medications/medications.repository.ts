@@ -49,4 +49,24 @@ export const medicationRepository = {
     const client = tx ?? prisma;
     return client.medication.update({ where: { carePlanId }, data });
   },
+
+
+  countActiveByUser(userId: string) {
+    return prisma.medication.count({
+      where: {
+        carePlan: {
+          userId,
+          status: {
+            not: 'COMPLETED',
+          },
+        },
+      },
+    });
+  },
+
+
+
+
+
+
 };

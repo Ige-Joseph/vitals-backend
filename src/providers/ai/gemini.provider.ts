@@ -6,9 +6,10 @@ import { Prisma } from '@prisma/client';
 const log = createLogger('gemini-provider');
 
 const GEMINI_TEXT_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+
 const GEMINI_VISION_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 interface GeminiTextResponse {
   candidates: Array<{
@@ -33,11 +34,26 @@ export const geminiProvider = {
         : {}),
     };
 
-    const response = await fetch(`${GEMINI_TEXT_URL}?key=${env.GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${GEMINI_TEXT_URL}?key=${env.GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        log.error('Gemini text request timed out');
+        throw AppError.internal('AI service timed out');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       const error = await response.text();
@@ -70,11 +86,26 @@ export const geminiProvider = {
       ],
     };
 
-    const response = await fetch(`${GEMINI_VISION_URL}?key=${env.GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${GEMINI_VISION_URL}?key=${env.GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        log.error('Gemini vision request timed out');
+        throw AppError.internal('AI service timed out');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       const error = await response.text();
