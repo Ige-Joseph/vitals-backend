@@ -68,6 +68,8 @@ export const careRepository = {
     return client.careEvent.createMany({ data, skipDuplicates: true });
   },
 
+  
+
   findCareEvent(id: string) {
     return prisma.careEvent.findUnique({
       where: { id },
@@ -300,23 +302,24 @@ export const careRepository = {
 
 
   listEventsByCarePlan(carePlanId: string, userId: string) {
-    return prisma.careEvent.findMany({
-      where: {
-        carePlanId,
-        carePlan: { userId },
-      },
-      orderBy: { scheduledFor: 'desc' },
-      include: {
-        reminders: true,
-        carePlan: {
-          select: {
-            id: true,
-            type: true,
-            title: true,
-            status: true,
-          },
+  return prisma.careEvent.findMany({
+    where: {
+      carePlanId,
+      carePlan: { userId },
+    },
+    orderBy: { scheduledFor: 'desc' },
+    include: {
+      reminders: true,
+      carePlan: {
+        select: {
+          id: true,
+          type: true,
+          title: true,
+          status: true,
         },
       },
-    });
-  },
+    },
+  });
+},
+  
 };

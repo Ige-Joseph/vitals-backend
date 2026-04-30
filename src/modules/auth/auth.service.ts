@@ -226,6 +226,15 @@ export const authService = {
     });
 
     return {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        planType: user.planType,
+        emailVerified: user.emailVerified,
+      },
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
     };

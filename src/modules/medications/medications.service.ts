@@ -128,7 +128,7 @@ export const medicationsService = {
         };
       },
       {
-        timeout: 15000,
+        timeout: 60000,
       },
     );
 

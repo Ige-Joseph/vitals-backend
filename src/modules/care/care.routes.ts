@@ -62,15 +62,31 @@ router.get('/events', careController.listEvents);
  * /care/events/{id}/status:
  *   patch:
  *     tags: [Care]
- *     summary: Mark a care event as done, skipped, or restore to pending
+ *     summary: Update a care event status using careEventId
+ *     description: |
+ *       Updates the status of a specific care event.
+ *       
+ *       ⚠️ IMPORTANT:
+ *       - The `id` in the path is the **care event ID**, not the care plan ID.
+ *       - Use the `id` returned from GET /care/events.
+ *       
+ *       Example flow:
+ *       1. Call GET /care/events
+ *       2. Pick an event from the response
+ *       3. Use that event's `id` here
+ *
  *     security:
  *       - bearerAuth: []
+ *
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema:
  *           type: string
+ *         description: Care event ID (NOT carePlanId)
+ *         example: "6e54befb-2444-446e-91d2-a2e8b1945335"
+ *
  *     requestBody:
  *       required: true
  *       content:
@@ -82,13 +98,15 @@ router.get('/events', careController.listEvents);
  *               status:
  *                 type: string
  *                 enum: [DONE, SKIPPED, PENDING]
+ *                 example: DONE
+ *
  *     responses:
  *       200:
- *         description: Status updated
+ *         description: Event status updated successfully
  *       403:
  *         description: Not your event
  *       404:
- *         description: Event not found
+ *         description: Care event not found
  */
 router.patch('/events/:id/status', careController.updateEventStatus);
 

@@ -4,6 +4,8 @@ import { careRepository } from './care.repository';
 import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
 import { Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
+
 
 const log = createLogger('care-service');
 
@@ -58,51 +60,65 @@ export const careService = {
     return updated;
   },
 
-  async scheduleEvents(
-    carePlanId: string,
-    userId: string,
-    events: Array<{
-      eventType: string;
-      title: string;
-      description?: string;
-      scheduledFor: Date;
-      metadata?: Prisma.InputJsonValue;
-      reminderOffsetMinutes?: number;
-    }>,
-    tx?: PrismaTx,
-  ): Promise<void> {
-    for (const event of events) {
-      const careEvent = await careRepository.createCareEvent(
-        {
-          carePlanId,
-          eventType: event.eventType,
-          title: event.title,
-          description: event.description,
-          scheduledFor: event.scheduledFor,
-          metadata: event.metadata ?? {},
-        },
-        tx,
-      );
+    async scheduleEvents(
+      carePlanId: string,
+      userId: string,
+      events: Array<{
+        eventType: string;
+        title: string;
+        description?: string;
+        scheduledFor: Date;
+        metadata?: Prisma.InputJsonValue;
+        reminderOffsetMinutes?: number;
+      }>,
+      tx?: PrismaTx,
+    ): Promise<void> {
+      const now = new Date();
 
-      const offsetMs = (event.reminderOffsetMinutes ?? 15) * 60 * 1000;
+
+
+      const careEvents = events.map((event) => ({
+      id: randomUUID(),
+      carePlanId,
+      eventType: event.eventType,
+      title: event.title,
+      description: event.description,
+      scheduledFor: event.scheduledFor,
+      metadata: event.metadata ?? {},
+      reminderOffsetMinutes: event.reminderOffsetMinutes ?? 15,
+    }));
+
+    await careRepository.createManyCareEvents(
+      careEvents.map(({ reminderOffsetMinutes, ...event }) => event),
+      tx,
+    );
+
+    const reminders = careEvents.reduce<
+      Array<{ careEventId: string; channel: 'PUSH'; sendAt: Date }>
+    >((acc, event) => {
+      const offsetMs = event.reminderOffsetMinutes * 60 * 1000;
       const sendAt = new Date(event.scheduledFor.getTime() - offsetMs);
 
-      if (sendAt > new Date()) {
-        await careRepository.createReminder(
-          {
-            careEventId: careEvent.id,
-            channel: 'PUSH',
-            sendAt,
-          },
-          tx,
-        );
+      if (sendAt > now) {
+        acc.push({
+          careEventId: event.id,
+          channel: 'PUSH',
+          sendAt,
+        });
       }
-    }
 
-    log.info('Care events scheduled', {
-      carePlanId,
-      userId,
-      count: events.length,
-    });
-  },
-};
+      return acc;
+    }, []);
+
+      if (reminders.length > 0) {
+        await careRepository.createManyReminders(reminders, tx);
+      }
+
+      log.info('Care events scheduled', {
+        carePlanId,
+        userId,
+        count: careEvents.length,
+        reminders: reminders.length,
+      });
+    },
+  };
