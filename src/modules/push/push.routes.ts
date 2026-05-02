@@ -62,7 +62,7 @@ router.post('/register', async (req: AuthenticatedRequest, res: Response, next: 
       },
     });
 
-    return created(res, null, 'Push token registered');
+    return created(res, { registered: true }, 'Push token registered');
   } catch (err) {
     next(err);
   }

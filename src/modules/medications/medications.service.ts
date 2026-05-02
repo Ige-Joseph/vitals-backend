@@ -155,12 +155,12 @@ export const medicationsService = {
     const med = await medicationRepository.findWithPlan(carePlanId, userId);
     if (!med) throw AppError.notFound('Medication not found');
 
-    if (med.carePlan.status === 'COMPLETED') {
-      throw AppError.conflict('Medication plan is already completed');
-    }
-
     await prisma.$transaction(async (tx: PrismaTx) => {
       await careRepository.updateCarePlanStatus(carePlanId, 'COMPLETED', tx);
+
+      await careRepository.cancelRemindersByCarePlan(carePlanId, tx);
+
+      await careRepository.markPendingEventsSkippedByCarePlan(carePlanId, tx);
 
       await careRepository.createActivityLog(
         {

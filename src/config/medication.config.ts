@@ -37,4 +37,4 @@ export const FREQUENCY_DEFINITIONS: Record<FrequencyKey, FrequencyDefinition> = 
 export const MAX_SCHEDULE_DAYS = 365;
 
 // How many minutes before dose time to send the reminder
-export const MEDICATION_REMINDER_OFFSET_MINUTES = 15;
+export const MEDICATION_REMINDER_OFFSET_MINUTES = 0;

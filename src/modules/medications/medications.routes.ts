@@ -275,6 +275,13 @@ router.get('/:carePlanId', async (req: AuthenticatedRequest, res: Response, next
  *   delete:
  *     tags: [Medications]
  *     summary: Deactivate a medication plan
+ *     description: |
+ *       Deactivates a medication plan by marking it as COMPLETED.
+ *       This will:
+ *       - Cancel all pending reminders for the medication
+ *       - Mark all pending dose events as SKIPPED
+ *       - Remove the medication from active timelines
+ *       Note: Historical dose records are preserved for tracking and analytics.
  *     security:
  *       - bearerAuth: []
  *     parameters:

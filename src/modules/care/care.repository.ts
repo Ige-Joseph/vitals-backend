@@ -109,7 +109,7 @@ export const careRepository = {
   ) {
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId },
+        carePlan: { userId, status: 'ACTIVE' },
         ...(filters.status && { status: filters.status }),
         ...(filters.type && { eventType: filters.type }),
         ...(filters.from || filters.to
@@ -321,5 +321,38 @@ export const careRepository = {
     },
   });
 },
+
+
+cancelRemindersByCarePlan(carePlanId: string, tx?: PrismaTx) {
+  const client = tx ?? prisma;
+
+  return client.reminder.updateMany({
+    where: {
+      careEvent: { carePlanId },
+      status: { in: ['PENDING', 'PROCESSING'] },
+    },
+    data: {
+      status: 'CANCELLED',
+      lastAttemptAt: new Date(),
+    },
+  });
+},
+
+markPendingEventsSkippedByCarePlan(carePlanId: string, tx?: PrismaTx) {
+  const client = tx ?? prisma;
+
+  return client.careEvent.updateMany({
+    where: {
+      carePlanId,
+      status: 'PENDING',
+    },
+    data: {
+      status: 'SKIPPED',
+    },
+  });
+},
+
+
+
   
 };

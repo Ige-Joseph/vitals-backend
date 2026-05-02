@@ -85,7 +85,7 @@ export const careService = {
       description: event.description,
       scheduledFor: event.scheduledFor,
       metadata: event.metadata ?? {},
-      reminderOffsetMinutes: event.reminderOffsetMinutes ?? 15,
+      reminderOffsetMinutes: event.reminderOffsetMinutes ?? 0,
     }));
 
     await careRepository.createManyCareEvents(
@@ -99,6 +99,8 @@ export const careService = {
       const offsetMs = event.reminderOffsetMinutes * 60 * 1000;
       const sendAt = new Date(event.scheduledFor.getTime() - offsetMs);
 
+      
+
       if (sendAt > now) {
         acc.push({
           careEventId: event.id,
@@ -109,6 +111,15 @@ export const careService = {
 
       return acc;
     }, []);
+
+
+    log.info('Reminder schedule debug', {
+    now,
+    reminders: reminders.map(r => ({
+      careEventId: r.careEventId,
+      sendAt: r.sendAt,
+    })),
+  });
 
       if (reminders.length > 0) {
         await careRepository.createManyReminders(reminders, tx);
