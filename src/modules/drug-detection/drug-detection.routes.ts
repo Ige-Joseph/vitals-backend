@@ -1,5 +1,5 @@
-import { Router, Response, NextFunction } from 'express';
-import multer from 'multer';
+import { Router, Response, NextFunction, Request } from 'express';
+import multer, { FileFilterCallback } from 'multer';
 import { prisma } from '@/lib/prisma';
 import { authenticate } from '@/middleware/auth.middleware';
 import { ok, created, badRequest } from '@/lib/response';
@@ -16,7 +16,11 @@ router.use(authenticate);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
+  fileFilter: (
+  _req: Request,
+  file: Express.Multer.File,
+  cb: FileFilterCallback,
+  ) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp'];
 
     if (allowed.includes(file.mimetype)) {
