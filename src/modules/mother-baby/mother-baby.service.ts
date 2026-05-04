@@ -188,8 +188,9 @@ export const motherBabyService = {
     const babyName = input.babyName ?? 'Baby';
 
     const vaccinationEvents = VACCINATION_SCHEDULE.map((vaccine) => {
-      const scheduledFor = new Date(deliveryDate);
-      scheduledFor.setDate(scheduledFor.getDate() + vaccine.ageWeeks * 7);
+        const scheduledFor = new Date(deliveryDate);
+        scheduledFor.setDate(scheduledFor.getDate() + vaccine.ageWeeks * 7);
+        scheduledFor.setHours(9, 0, 0, 0);
 
       return {
         eventType: vaccine.eventType,
@@ -280,6 +281,7 @@ export const motherBabyService = {
     const vaccinationEvents = VACCINATION_SCHEDULE.map((vaccine) => {
       const scheduledFor = new Date(deliveryDate);
       scheduledFor.setDate(scheduledFor.getDate() + vaccine.ageWeeks * 7);
+      scheduledFor.setHours(9, 0, 0, 0);
 
       return {
         eventType: vaccine.eventType,
@@ -392,4 +394,43 @@ export const motherBabyService = {
 
     return result;
   },
+
+
+
+    async cancelBabyTimeline(userId: string) {
+      const activePlan = await motherBabyRepository.findActiveBabyPlan(userId)
+
+      if (!activePlan) {
+        throw AppError.notFound('No active baby timeline found')
+      }
+
+      return prisma.$transaction(async (tx) => {
+        const events = await tx.careEvent.findMany({
+          where: {
+            carePlanId: activePlan.id,
+            status: 'PENDING',
+          },
+          select: { id: true },
+        })
+
+        for (const event of events) {
+          await careRepository.cancelRemindersByCareEvent(event.id, tx)
+        }
+
+        const updated = await careRepository.updateCarePlanStatus(
+          activePlan.id,
+          'PAUSED',
+          tx
+        )
+
+        await careRepository.createActivityLog({
+          userId,
+          type: 'BABY_TIMELINE_CANCELLED',
+          message: 'Baby vaccination timeline cancelled',
+          metadata: { carePlanId: activePlan.id },
+        }, tx)
+
+        return updated
+      })
+    }
 };

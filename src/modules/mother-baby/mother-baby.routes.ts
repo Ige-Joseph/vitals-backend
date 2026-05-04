@@ -416,4 +416,70 @@ router.post('/baby-profile', async (req: AuthenticatedRequest, res: Response, ne
   }
 });
 
+
+
+
+/**
+ * @swagger
+ * /mother-baby/baby-profile/cancel:
+ *   patch:
+ *     tags: [Mother & Baby]
+ *     summary: Cancel active baby vaccination timeline
+ *     description: Cancels the current active baby vaccination timeline for the authenticated user so a new baby profile or vaccination schedule can be created later.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Baby vaccination timeline cancelled
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Baby vaccination timeline cancelled
+ *                 data:
+ *                   type: object
+ *                 errorCode:
+ *                   type: string
+ *                   nullable: true
+ *                   example: null
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: No active baby vaccination timeline found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch('/baby-profile/cancel', async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await motherBabyService.cancelBabyTimeline(req.user!.sub);
+    return ok(res, result, 'Baby vaccination timeline cancelled');
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
+
+
+
+
+
+
+
+

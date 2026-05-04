@@ -57,7 +57,11 @@ export const motherBabyRepository = {
 
   findAllBabyPlans(userId: string) {
     return prisma.carePlan.findMany({
-      where: { userId, type: 'VACCINATION' },
+      where: {
+        userId,
+        type: 'VACCINATION',
+        status: 'ACTIVE',
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         careEvents: {
