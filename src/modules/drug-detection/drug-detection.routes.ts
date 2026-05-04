@@ -97,7 +97,11 @@ const DRUG_DETECTION_FALLBACK: DrugDetectionResponse = {
 router.post(
   '/',
   upload.single('image'),
-  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  async (
+      req: AuthenticatedRequest & { file?: Express.Multer.File },
+      res: Response,
+      next: NextFunction,
+    ) => {
     try {
       if (!req.file) return badRequest(res, 'Image file is required');
 
