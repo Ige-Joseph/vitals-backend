@@ -1,7 +1,10 @@
+import { DraftStatus } from '@prisma/client';
+
 import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { careRepository } from '@/modules/care/care.repository';
 import { careService } from '@/modules/care/care.service';
+import { aiMedicationDraftsRepository } from '@/modules/ai-medication-drafts/ai-medication-drafts.repository';
 import { medicationRepository } from './medications.repository';
 import { generateMedicationSchedule } from './medications.scheduler';
 import { FrequencyKey } from '@/config/medication.config';
@@ -20,6 +23,7 @@ export interface CreateMedicationInput {
   durationDays?: number;
   customTimes?: string[];
   instructions?: string;
+  aiDraftId?: string;
 }
 
 const parseDateOnly = (value: string, fieldName: string): Date => {
@@ -34,17 +38,40 @@ export const medicationsService = {
   async createMedication(userId: string, input: CreateMedicationInput) {
     const startDate = parseDateOnly(input.startDate, 'startDate');
 
+    const activeMedicationCount = await medicationRepository.countActiveByUser(userId);
 
-    
+    if (activeMedicationCount >= FREE_MEDICATION_PLAN_LIMIT) {
+      throw AppError.badRequest(
+        `You can only create up to ${FREE_MEDICATION_PLAN_LIMIT} active medication plans for now`,
+      );
+    }
 
-      const activeMedicationCount = await medicationRepository.countActiveByUser(userId);
+    let aiDraftIdToConfirm: string | undefined;
 
-      if (activeMedicationCount >= FREE_MEDICATION_PLAN_LIMIT) {
-        throw AppError.badRequest(
-          `You can only create up to ${FREE_MEDICATION_PLAN_LIMIT} active medication plans for now`,
-        );
+    if (input.aiDraftId) {
+      const draft = await aiMedicationDraftsRepository.findByIdForUser(
+        input.aiDraftId,
+        userId,
+      );
+
+      if (!draft) {
+        throw AppError.notFound('AI medication draft not found');
       }
 
+      if (draft.status === DraftStatus.CANCELLED) {
+        throw AppError.badRequest('This AI medication draft has been cancelled.');
+      }
+
+      if (draft.status === DraftStatus.CONFIRMED) {
+        throw AppError.badRequest('This AI medication draft has already been used.');
+      }
+
+      if (draft.expiresAt < new Date()) {
+        throw AppError.badRequest('This AI medication draft has expired. Please start again.');
+      }
+
+      aiDraftIdToConfirm = draft.id;
+    }
 
     let endDate: Date;
     if (input.endDate) {
@@ -75,6 +102,7 @@ export const medicationsService = {
       medication: input.name,
       frequency: input.frequency,
       doses: schedule.length,
+      aiDraftId: aiDraftIdToConfirm,
     });
 
     const result = await prisma.$transaction(
@@ -87,6 +115,7 @@ export const medicationsService = {
             metadata: {
               frequency: input.frequency,
               customTimes: input.customTimes ?? null,
+              aiDraftId: aiDraftIdToConfirm ?? null,
             },
           },
           tx,
@@ -107,6 +136,16 @@ export const medicationsService = {
 
         await careService.scheduleEvents(carePlan.id, userId, schedule, tx);
 
+        if (aiDraftIdToConfirm) {
+          await tx.medicationDraft.update({
+            where: { id: aiDraftIdToConfirm },
+            data: {
+              status: DraftStatus.CONFIRMED,
+              lastQuestion: null,
+            },
+          });
+        }
+
         await careRepository.createActivityLog(
           {
             userId,
@@ -116,6 +155,7 @@ export const medicationsService = {
               carePlanId: carePlan.id,
               doses: schedule.length,
               frequency: input.frequency,
+              aiDraftId: aiDraftIdToConfirm ?? null,
             },
           },
           tx,
@@ -136,6 +176,7 @@ export const medicationsService = {
       userId,
       carePlanId: result.carePlan.id,
       scheduledDoses: result.scheduledDoses,
+      aiDraftId: aiDraftIdToConfirm,
     });
 
     return result;
@@ -176,12 +217,10 @@ export const medicationsService = {
     log.info('Medication deactivated', { userId, carePlanId });
   },
 
-
-    async getMedicationHistory(userId: string, carePlanId: string) {
+  async getMedicationHistory(userId: string, carePlanId: string) {
     const med = await medicationRepository.findWithPlan(carePlanId, userId);
     if (!med) throw AppError.notFound('Medication not found');
 
     return careRepository.listEventsByCarePlan(carePlanId, userId);
   },
-
 };

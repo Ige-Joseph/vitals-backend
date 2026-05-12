@@ -30,6 +30,7 @@ export const createMedicationSchema = z
       .min(1, 'At least one custom time is required')
       .max(3, 'A maximum of 3 custom times is allowed'),
     instructions: z.string().max(500).optional(),
+    aiDraftId: z.string().uuid('Invalid AI draft id').optional(),
   })
   .refine((data) => !!data.endDate !== !!data.durationDays, {
     message: 'Provide either endDate or durationDays, but not both',

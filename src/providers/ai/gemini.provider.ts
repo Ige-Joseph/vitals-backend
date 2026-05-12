@@ -142,4 +142,62 @@ export const geminiProvider = {
       return null;
     }
   },
+
+
+
+    async analyzeAudio(base64Audio: string, mimeType: string, prompt: string): Promise<string> {
+    if (!env.GEMINI_API_KEY) {
+      throw AppError.internal('AI service is not configured');
+    }
+
+    const body = {
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType, data: base64Audio } },
+            { text: prompt },
+          ],
+        },
+      ],
+    };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${GEMINI_TEXT_URL}?key=${env.GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        log.error('Gemini audio request timed out');
+        throw AppError.internal('AI audio service timed out');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      const error = await response.text();
+      log.error('Gemini audio API error', { status: response.status, error });
+      throw AppError.internal('AI audio service returned an error');
+    }
+
+    const data = (await response.json()) as GeminiTextResponse;
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw AppError.internal('AI audio service returned an empty response');
+    }
+
+    return text;
+  },
+
+
 };

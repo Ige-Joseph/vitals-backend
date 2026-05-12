@@ -36,8 +36,12 @@ const envSchema = z
     API_URL: z.string().url('API_URL must be a valid URL'),
     CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN is required'),
 
-    // AI
+    // AI - Gemini
     GEMINI_API_KEY: z.string().optional(),
+
+    // AI (AssemblyAI)
+    ASSEMBLYAI_API_KEY: z.string().optional(),
+    ASSEMBLYAI_BASE_URL: z.string().url().default('https://api.assemblyai.com'),
 
     // Storage
     CLOUDINARY_CLOUD_NAME: z.string().optional(),

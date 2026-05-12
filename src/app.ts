@@ -23,6 +23,8 @@ import drugDetectionRoutes from '@/modules/drug-detection/drug-detection.routes'
 import usageRoutes from '@/modules/usage/usage.routes';
 import motherBabyRoutes from '@/modules/mother-baby/mother-baby.routes';
 import articleRoutes from '@/modules/articles/articles.routes';
+import aiMedicationDraftsRoutes from '@/modules/ai-medication-drafts/ai-medication-drafts.routes';
+
 
 const log = createLogger('app');
 
@@ -112,6 +114,7 @@ export const createApp = () => {
   app.use(`${prefix}/usage`, usageRoutes);
   app.use(`${prefix}/mother-baby`, motherBabyRoutes);
   app.use(`${prefix}/articles`, articleRoutes);
+  app.use(`${prefix}/ai/medication-drafts`, aiMedicationDraftsRoutes);
 
   // ─────────────────────────────────────────────
   // Error handling — must be last
