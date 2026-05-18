@@ -1,0 +1,15 @@
+-- AlterTable
+ALTER TABLE "profiles" ADD COLUMN     "alcoholUse" TEXT,
+ADD COLUMN     "allergies" TEXT[],
+ADD COLUMN     "bloodGroup" TEXT,
+ADD COLUMN     "city" TEXT,
+ADD COLUMN     "currentMedications" TEXT[],
+ADD COLUMN     "dateOfBirth" TIMESTAMP(3),
+ADD COLUMN     "disabilities" TEXT[],
+ADD COLUMN     "existingConditions" TEXT[],
+ADD COLUMN     "genotype" TEXT,
+ADD COLUMN     "heightCm" DOUBLE PRECISION,
+ADD COLUMN     "phoneNumber" TEXT,
+ADD COLUMN     "profilePhotoUrl" TEXT,
+ADD COLUMN     "smokingStatus" TEXT,
+ADD COLUMN     "weightKg" DOUBLE PRECISION;

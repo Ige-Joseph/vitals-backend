@@ -25,22 +25,28 @@ export const userService = {
 
     const { firstName, lastName, ...profileData } = data;
 
-    const result = await prisma.$transaction(async (tx) => {
-      if (firstName !== undefined || lastName !== undefined) {
-        await userRepository.updateUserNames(
-          userId,
-          {
-            ...(firstName !== undefined ? { firstName } : {}),
-            ...(lastName !== undefined ? { lastName } : {}),
-          },
-          tx,
-        );
-      }
+    const result = await prisma.$transaction(
+      async (tx) => {
+        if (firstName !== undefined || lastName !== undefined) {
+          await userRepository.updateUserNames(
+            userId,
+            {
+              ...(firstName !== undefined ? { firstName } : {}),
+              ...(lastName !== undefined ? { lastName } : {}),
+            },
+            tx,
+          );
+        }
 
-      const profile = await userRepository.upsertProfile(userId, profileData, tx);
+        const profile = await userRepository.upsertProfile(userId, profileData, tx);
 
-      return profile;
-    });
+        return profile;
+      },
+      {
+        timeout: 15000,
+        maxWait: 10000,
+      },
+    );
 
     log.info('Profile updated', { userId });
     return result;

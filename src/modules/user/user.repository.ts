@@ -10,6 +10,22 @@ export interface UpdateProfileInput {
   timezone?: string;
   notificationPreferences?: Prisma.InputJsonValue;
   selectedJourney?: 'MEDICATION' | 'PREGNANCY' | 'VACCINATION';
+
+  city?: string;
+  phoneNumber?: string;
+  dateOfBirth?: Date;
+  profilePhotoUrl?: string;
+
+  bloodGroup?: string;
+  genotype?: string;
+  heightCm?: number;
+  weightKg?: number;
+  allergies?: string[];
+  existingConditions?: string[];
+  currentMedications?: string[];
+  disabilities?: string[];
+  smokingStatus?: string;
+  alcoholUse?: string;
 }
 
 export const userRepository = {

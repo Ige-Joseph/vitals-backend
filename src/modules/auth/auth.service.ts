@@ -9,6 +9,7 @@ import { authRepository } from './auth.repository';
 import { outboxRepository } from '@/modules/outbox/outbox.repository';
 import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
+import { emailService } from '@/providers/email/email.service';
 
 const log = createLogger('auth-service');
 
@@ -240,51 +241,49 @@ export const authService = {
     };
   },
 
-  async verifyEmail(rawToken: string) {
-    const tokenHash = hashToken(rawToken);
-    const record = await authRepository.findVerificationToken(tokenHash);
+    async verifyEmail(rawToken: string) {
+      const tokenHash = hashToken(rawToken);
+      const record = await authRepository.findVerificationToken(tokenHash);
 
-    if (!record) {
-      throw AppError.badRequest('This verification link is invalid or has expired');
-    }
+      if (!record) {
+        throw AppError.badRequest('This verification link is invalid or has expired');
+      }
 
-    if (record.usedAt) {
-      return { alreadyVerified: true };
-    }
+      if (record.usedAt) {
+        return { alreadyVerified: true };
+      }
 
-    if (record.expiresAt < new Date()) {
-      throw AppError.badRequest('This verification link has expired. Please request a new one');
-    }
+      if (record.expiresAt < new Date()) {
+        throw AppError.badRequest('This verification link has expired. Please request a new one');
+      }
 
-    await prisma.$transaction(async (tx: PrismaTx) => {
-      await authRepository.markVerificationTokenUsed(record.id, tx);
-      await authRepository.markEmailVerified(record.userId, tx);
-    });
+      await prisma.$transaction(async (tx: PrismaTx) => {
+        await authRepository.markVerificationTokenUsed(record.id, tx);
+        await authRepository.markEmailVerified(record.userId, tx);
+      });
 
-    log.info('Email verified', { userId: record.userId });
+      log.info('Email verified', { userId: record.userId });
 
-    return { alreadyVerified: false };
-  },
+      return { alreadyVerified: false };
+    },
 
   async resendVerification(userId: string) {
-    const user = await authRepository.findUserById(userId);
+    const user = await authRepository.findUserById(userId)
 
     if (!user) {
-      throw AppError.notFound('User not found');
+      throw AppError.notFound('User not found')
     }
 
     if (user.emailVerified) {
-      throw AppError.conflict('Email is already verified');
+      return
     }
 
-    const rawToken = uuidv4();
-    const tokenHash = hashToken(rawToken);
+    const rawToken = generateOpaqueToken()
+    const tokenHash = hashToken(rawToken)
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24)
 
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + env.EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS);
-
-    await prisma.$transaction(async (tx: PrismaTx) => {
-      await authRepository.invalidatePreviousVerificationTokens(user.id, tx);
+    await prisma.$transaction(async (tx) => {
+      await authRepository.invalidatePreviousVerificationTokens(user.id, tx)
 
       await authRepository.createVerificationToken(
         {
@@ -293,23 +292,13 @@ export const authService = {
           expiresAt,
         },
         tx,
-      );
+      )
+    })
 
-      await outboxRepository.create(
-        {
-          userId: user.id,
-          type: 'EMAIL_VERIFICATION',
-          payload: {
-            userId: user.id,
-            email: user.email,
-            rawToken,
-          },
-        },
-        tx,
-      );
-    });
-
-    log.info('Verification email resent', { userId: user.id });
+    await emailService.sendVerificationEmail({
+      to: user.email,
+      rawToken,
+    })
   },
 
   async logout(rawRefreshToken: string) {
@@ -327,7 +316,7 @@ export const authService = {
 
 
 
-    async forgotPassword(email: string) {
+  async forgotPassword(email: string) {
     const user = await authRepository.findUserByEmail(email);
 
     // Do not reveal whether the email exists
@@ -358,22 +347,14 @@ export const authService = {
         },
         tx,
       );
-
-      await outboxRepository.create(
-        {
-          userId: user.id,
-          type: 'PASSWORD_RESET',
-          payload: {
-            userId: user.id,
-            email: user.email,
-            rawToken,
-          },
-        },
-        tx,
-      );
     });
 
-    log.info('Password reset email queued', { userId: user.id });
+    await emailService.sendPasswordResetEmail({
+      to: user.email,
+      rawToken,
+    });
+
+    log.info('Password reset email sent', { userId: user.id });
   },
 
   async resetPassword(rawToken: string, newPassword: string) {

@@ -19,6 +19,23 @@ const updateProfileSchema = z.object({
       reminderChannel: z.enum(['PUSH', 'EMAIL', 'BOTH']).optional(),
     })
     .optional(),
+
+    city: z.string().max(100).optional(),
+    phoneNumber: z.string().max(20).optional(),
+    dateOfBirth: z.coerce.date().optional(),
+    profilePhotoUrl: z.string().url().optional(),
+
+    bloodGroup: z.string().max(10).optional(),
+    genotype: z.string().max(10).optional(),
+    heightCm: z.number().positive().optional(),
+    weightKg: z.number().positive().optional(),
+    allergies: z.array(z.string()).optional(),
+    existingConditions: z.array(z.string()).optional(),
+    currentMedications: z.array(z.string()).optional(),
+    disabilities: z.array(z.string()).optional(),
+    smokingStatus: z.string().max(50).optional(),
+    alcoholUse: z.string().max(50).optional(),
+
 });
 
 export const userController = {

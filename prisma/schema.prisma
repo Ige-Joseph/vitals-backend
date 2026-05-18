@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ─────────────────────────────────────────────
@@ -201,15 +202,36 @@ model PasswordResetToken {
 model Profile {
   id                      String    @id @default(uuid())
   userId                  String    @unique
+
+  // Basic
   gender                  Gender?
   country                 String?
+  city                    String?
+  phoneNumber             String?
+  dateOfBirth             DateTime?
+  profilePhotoUrl         String?
+
+  // Medical
+  bloodGroup              String?
+  genotype                String?
+  heightCm                Float?
+  weightKg                Float?
+  allergies               String[]
+  existingConditions      String[]
+  currentMedications      String[]
+  disabilities            String[]
+  smokingStatus           String?
+  alcoholUse              String?
+
+  // Existing
   timezone                String    @default("Africa/Lagos")
   notificationPreferences Json      @default("{}")
   selectedJourney         Journey?
+
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }

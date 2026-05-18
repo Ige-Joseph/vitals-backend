@@ -16,7 +16,7 @@ export const emailTemplates = {
       <td align="center" style="padding:40px 0;">
         <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08);">
           <tr>
-            <td style="background:#1a7f64;padding:32px 40px;">
+            <td style="background:#1a73e8;padding:32px 40px;">
               <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">Vitals</h1>
             </td>
           </tr>
@@ -28,7 +28,7 @@ export const emailTemplates = {
                 Thank you for signing up for Vitals. Please verify your email address by clicking the button below.
               </p>
               <a href="${verificationUrl}"
-                style="display:inline-block;background:#1a7f64;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
+                style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
                 Verify email address
               </a>
               <p style="margin:24px 0 0;color:#888;font-size:13px;line-height:1.6;">
@@ -36,7 +36,7 @@ export const emailTemplates = {
               </p>
               <p style="margin:16px 0 0;color:#aaa;font-size:12px;">
                 If the button doesn't work, copy and paste this link into your browser:<br/>
-                <a href="${verificationUrl}" style="color:#1a7f64;word-break:break-all;">${verificationUrl}</a>
+                <a href="${verificationUrl}" style="color:#1a73e8;word-break:break-all;">${verificationUrl}</a>
               </p>
             </td>
           </tr>
@@ -70,7 +70,7 @@ export const emailTemplates = {
       <td align="center" style="padding:40px 0;">
         <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08);">
           <tr>
-            <td style="background:#1a7f64;padding:32px 40px;">
+            <td style="background:#1a73e8;padding:32px 40px;">
               <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">Vitals</h1>
             </td>
           </tr>
@@ -85,7 +85,7 @@ export const emailTemplates = {
                 Please take your medication and mark it as taken in the Vitals app.
               </p>
               <a href="${env.FRONTEND_URL}/care"
-                style="display:inline-block;background:#1a7f64;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
+                style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
                 Open Vitals
               </a>
               <p style="margin:24px 0 0;color:#aaa;font-size:12px;">
@@ -126,7 +126,7 @@ export const emailTemplates = {
               
               <!-- Header -->
               <tr>
-                <td style="background:#1a7f64;padding:32px 40px;">
+                <td style="background:#1a73e8;padding:32px 40px;">
                   <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">Vitals</h1>
                 </td>
               </tr>
@@ -142,7 +142,7 @@ export const emailTemplates = {
                   </p>
 
                   <a href="${resetUrl}"
-                    style="display:inline-block;background:#1a7f64;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
+                    style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
                     Reset password
                   </a>
 
@@ -152,7 +152,7 @@ export const emailTemplates = {
 
                   <p style="margin:16px 0 0;color:#aaa;font-size:12px;">
                     If the button doesn't work, copy and paste this link into your browser:<br/>
-                    <a href="${resetUrl}" style="color:#1a7f64;word-break:break-all;">${resetUrl}</a>
+                    <a href="${resetUrl}" style="color:#1a73e8;word-break:break-all;">${resetUrl}</a>
                   </p>
                 </td>
               </tr>
