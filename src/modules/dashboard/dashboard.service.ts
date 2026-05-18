@@ -60,50 +60,28 @@ export const dashboardService = {
   },
 
   async getMotherBabySummary(userId: string) {
-    const [
-      totalPregnancies,
-      activePregnancies,
-      completedPregnancies,
-      totalBabies,
-      standaloneBabies,
-    ] = await Promise.all([
-      prisma.carePlan.count({
-        where: {
-          userId,
-          type: 'PREGNANCY',
-        },
+    // Two queries instead of five — pregnancies grouped by status in one shot,
+    // babies fetched once so we can derive the standalone count in-process.
+    const [pregnancyGroups, babies] = await Promise.all([
+      prisma.carePlan.groupBy({
+        by: ['status'],
+        where: { userId, type: 'PREGNANCY' },
+        _count: true,
       }),
-      prisma.carePlan.count({
-        where: {
-          userId,
-          type: 'PREGNANCY',
-          status: 'ACTIVE',
-        },
-      }),
-      prisma.carePlan.count({
-        where: {
-          userId,
-          type: 'PREGNANCY',
-          status: 'COMPLETED',
-        },
-      }),
-      prisma.carePlan.count({
-        where: {
-          userId,
-          type: 'VACCINATION',
-        },
-      }),
-      prisma.carePlan.count({
-        where: {
-          userId,
-          type: 'VACCINATION',
-          metadata: {
-            path: ['standalone'],
-            equals: true,
-          },
-        },
+      prisma.carePlan.findMany({
+        where: { userId, type: 'VACCINATION' },
+        select: { metadata: true },
       }),
     ]);
+
+    const totalPregnancies = pregnancyGroups.reduce((sum, g) => sum + g._count, 0);
+    const activePregnancies = pregnancyGroups.find(g => g.status === 'ACTIVE')?._count ?? 0;
+    const completedPregnancies = pregnancyGroups.find(g => g.status === 'COMPLETED')?._count ?? 0;
+
+    const totalBabies = babies.length;
+    const standaloneBabies = babies.filter(
+      b => (b.metadata as Record<string, unknown> | null)?.standalone === true,
+    ).length;
 
     return {
       pregnancies: {
