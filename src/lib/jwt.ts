@@ -34,4 +34,27 @@ export const jwtUtil = {
   verifyRefreshToken(token: string): RefreshTokenPayload {
     return jwt.verify(token, env.JWT_REFRESH_SECRET) as RefreshTokenPayload;
   },
+
+  generateOAuthStateToken(userId: string): string {
+    return jwt.sign(
+      {
+        sub: userId,
+        type: 'GOOGLE_CALENDAR_CONNECT',
+      },
+      env.JWT_ACCESS_SECRET,
+      {
+        expiresIn: '10m',
+      },
+    );
+  },
+
+  verifyOAuthStateToken(token: string): {
+    sub: string;
+    type: string;
+  } {
+    return jwt.verify(token, env.JWT_ACCESS_SECRET) as {
+      sub: string;
+      type: string;
+    };
+  },
 };

@@ -72,6 +72,11 @@ const envSchema = z
     // Token expiry
     EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS: z.coerce.number().default(24),
     PASSWORD_RESET_TOKEN_EXPIRES_HOURS: z.coerce.number().default(1),
+
+    // Google OAuth (for calendar integration)
+    GOOGLE_CLIENT_ID: z.string().min(1),
+    GOOGLE_CLIENT_SECRET: z.string().min(1),
+    GOOGLE_REDIRECT_URI: z.string().url(),
   })
   .superRefine((data, ctx) => {
     const hasUpstashUrl = !!data.UPSTASH_REDIS_URL;

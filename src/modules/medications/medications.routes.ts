@@ -320,11 +320,16 @@ router.delete('/:carePlanId', async (req: AuthenticatedRequest, res: Response, n
   try {
     const carePlanId = req.params.carePlanId as string;
 
-    await medicationsService.deactivateMedication(
-      req.user!.sub,
-      carePlanId
-    );
-    return ok(res, null, 'Medication plan deactivated');
+  const result = await medicationsService.deactivateMedication(
+    req.user!.sub,
+    carePlanId,
+  );
+
+  return ok(
+    res,
+    result,
+    'Medication plan deactivated',
+  );
   } catch (err) {
     next(err);
   }

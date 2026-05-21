@@ -14,6 +14,7 @@ import {
   VACCINATION_SCHEDULE,
 } from '@/config/pregnancy.config';
 import { createLogger } from '@/lib/logger';
+import { calendarService } from '@/modules/calendar/calendar.service';
 import type { PrismaTx } from '@/types/prisma';
 
 const log = createLogger('mother-baby-service');
@@ -131,6 +132,16 @@ export const motherBabyService = {
       trimester,
       ancEventsScheduled: result.ancEventsScheduled,
     });
+
+    try {
+      await calendarService.prepareCarePlanSync(userId, result.carePlan.id);
+    } catch (error) {
+      log.warn('Pregnancy calendar sync skipped or failed', {
+        userId,
+        carePlanId: result.carePlan.id,
+        error,
+      });
+    }
 
     return result;
   },
@@ -261,6 +272,19 @@ export const motherBabyService = {
       vaccinationsScheduled: result.vaccinationsScheduled,
     });
 
+    try {
+      await calendarService.prepareCarePlanSync(
+        userId,
+        result.babyCarePlan.id,
+      );
+    } catch (error) {
+      log.warn('Delivery vaccination calendar sync skipped or failed', {
+        userId,
+        carePlanId: result.babyCarePlan.id,
+        error,
+      });
+    }
+
     return result;
   },
 
@@ -335,6 +359,16 @@ export const motherBabyService = {
       babyCarePlanId: result.babyCarePlan.id,
     });
 
+    try {
+      await calendarService.prepareCarePlanSync(userId, result.babyCarePlan.id);
+    } catch (error) {
+      log.warn('Baby calendar sync skipped or failed', {
+        userId,
+        carePlanId: result.babyCarePlan.id,
+        error,
+      });
+    }
+
     return result;
   },
 
@@ -392,45 +426,70 @@ export const motherBabyService = {
       carePlanId: result.carePlanId,
     });
 
+    try {
+      await calendarService.cleanupCarePlanEvents(userId, result.carePlanId);
+    } catch (error) {
+      log.warn('Pregnancy calendar cleanup skipped or failed', {
+        userId,
+        carePlanId: result.carePlanId,
+        error,
+      });
+    }
+
     return result;
   },
 
 
 
-    async cancelBabyTimeline(userId: string) {
-      const activePlan = await motherBabyRepository.findActiveBabyPlan(userId)
+  async cancelBabyTimeline(userId: string) {
+    const activePlan = await motherBabyRepository.findActiveBabyPlan(userId);
 
-      if (!activePlan) {
-        throw AppError.notFound('No active baby timeline found')
+    if (!activePlan) {
+      throw AppError.notFound('No active baby timeline found');
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const events = await tx.careEvent.findMany({
+        where: {
+          carePlanId: activePlan.id,
+          status: 'PENDING',
+        },
+        select: { id: true },
+      });
+
+      for (const event of events) {
+        await careRepository.cancelRemindersByCareEvent(event.id, tx);
       }
 
-      return prisma.$transaction(async (tx) => {
-        const events = await tx.careEvent.findMany({
-          where: {
-            carePlanId: activePlan.id,
-            status: 'PENDING',
-          },
-          select: { id: true },
-        })
+      const updated = await careRepository.updateCarePlanStatus(
+        activePlan.id,
+        'PAUSED',
+        tx,
+      );
 
-        for (const event of events) {
-          await careRepository.cancelRemindersByCareEvent(event.id, tx)
-        }
-
-        const updated = await careRepository.updateCarePlanStatus(
-          activePlan.id,
-          'PAUSED',
-          tx
-        )
-
-        await careRepository.createActivityLog({
+      await careRepository.createActivityLog(
+        {
           userId,
           type: 'BABY_TIMELINE_CANCELLED',
           message: 'Baby vaccination timeline cancelled',
           metadata: { carePlanId: activePlan.id },
-        }, tx)
+        },
+        tx,
+      );
 
-        return updated
-      })
+      return updated;
+    });
+
+    try {
+      await calendarService.cleanupCarePlanEvents(userId, result.id);
+    } catch (error) {
+      log.warn('Baby calendar cleanup skipped or failed', {
+        userId,
+        carePlanId: result.id,
+        error,
+      });
     }
+
+    return result;
+  },
 };

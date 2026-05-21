@@ -10,6 +10,7 @@ import { generateMedicationSchedule } from './medications.scheduler';
 import { FrequencyKey } from '@/config/medication.config';
 import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
+import { calendarService } from '@/modules/calendar/calendar.service';
 
 const log = createLogger('medications-service');
 const FREE_MEDICATION_PLAN_LIMIT = 5;
@@ -179,6 +180,37 @@ export const medicationsService = {
       aiDraftId: aiDraftIdToConfirm,
     });
 
+
+    
+
+    // Commented out calendar sync for now to avoid issues during medication creation. Will revisit after initial launch when we have more stability and better error monitoring in place.
+
+    //     let calendarSync = null;
+
+    // try {
+    //   calendarSync = await calendarService.prepareCarePlanSync(
+    //     userId,
+    //     result.carePlan.id,
+    //   );
+    // } catch (error: any) {
+    //   log.error('Calendar sync failed during medication creation', {
+    //     userId,
+    //     carePlanId: result.carePlan.id,
+    //     error: error.message,
+    //   });
+
+    //   calendarSync = {
+    //     failed: true,
+    //     message: error.message ?? 'Calendar sync failed',
+    //   };
+    // }
+
+    // return {
+    //   ...result,
+    //   calendarSync,
+    // };
+
+
     return result;
   },
 
@@ -194,14 +226,27 @@ export const medicationsService = {
 
   async deactivateMedication(userId: string, carePlanId: string) {
     const med = await medicationRepository.findWithPlan(carePlanId, userId);
-    if (!med) throw AppError.notFound('Medication not found');
+
+    if (!med) {
+      throw AppError.notFound('Medication not found');
+    }
 
     await prisma.$transaction(async (tx: PrismaTx) => {
-      await careRepository.updateCarePlanStatus(carePlanId, 'COMPLETED', tx);
+      await careRepository.updateCarePlanStatus(
+        carePlanId,
+        'COMPLETED',
+        tx,
+      );
 
-      await careRepository.cancelRemindersByCarePlan(carePlanId, tx);
+      await careRepository.cancelRemindersByCarePlan(
+        carePlanId,
+        tx,
+      );
 
-      await careRepository.markPendingEventsSkippedByCarePlan(carePlanId, tx);
+      await careRepository.markPendingEventsSkippedByCarePlan(
+        carePlanId,
+        tx,
+      );
 
       await careRepository.createActivityLog(
         {
@@ -214,7 +259,35 @@ export const medicationsService = {
       );
     });
 
-    log.info('Medication deactivated', { userId, carePlanId });
+    let calendarCleanup = null;
+
+    try {
+      calendarCleanup = await calendarService.cleanupCarePlanEvents(
+        userId,
+        carePlanId,
+      );
+    } catch (error: any) {
+      log.error('Calendar cleanup failed during medication deactivation', {
+        userId,
+        carePlanId,
+        error: error.message,
+      });
+
+      calendarCleanup = {
+        failed: true,
+        message: error.message ?? 'Calendar cleanup failed',
+      };
+    }
+
+    log.info('Medication deactivated', {
+      userId,
+      carePlanId,
+    });
+
+    return {
+      success: true,
+      calendarCleanup,
+    };
   },
 
   async getMedicationHistory(userId: string, carePlanId: string) {
