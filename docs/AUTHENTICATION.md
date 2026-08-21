@@ -34,8 +34,32 @@ the refresh token in JSON. Access tokens continue to be sent as Bearer tokens.
 4. The server rotates the refresh token and replaces the cookie.
 5. Logout revokes the presented token and clears the cookie.
 
-Concurrent browser refreshes must be deduplicated by the client because refresh
-tokens are single-use.
+Clients should still deduplicate concurrent refreshes, but the server no longer
+depends on it. See rotation grace window below.
+
+## Rotation grace window
+
+Refresh tokens are single-use, and presenting an already-rotated token is the
+reuse signal described in OAuth 2.0 Security BCP section 4.14. Treating every
+such request as theft is wrong for browsers: all tabs share one refresh cookie,
+so session restore, a double reload, or two tabs opened together can present
+the same token within milliseconds of each other.
+
+Each rotation records the hash of the token that superseded it. When a revoked
+token is presented, the server resolves it as follows:
+
+1. If it was revoked more than 30 seconds ago, revoke every token for the user.
+2. Otherwise follow the replacement chain, up to five hops, while each link was
+   itself rotated inside the window.
+3. If the chain reaches a token that is live, rotate from that token and return
+   a new pair. The concurrent request succeeds.
+4. If the chain ends in a revoked, expired, or missing token, revoke every
+   token for the user.
+
+Grace resolutions are logged at info, family revocations at warn. A stolen
+token replayed inside the window succeeds, which is the accepted trade for not
+signing users out during ordinary use; Auth0 and better-auth both default to
+the same 30 seconds. Widening the window widens that exposure.
 
 ## Deployment migration
 
