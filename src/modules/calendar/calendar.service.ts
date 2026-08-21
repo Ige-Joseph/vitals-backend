@@ -161,8 +161,10 @@ export const calendarService = {
 
 
     async getCalendarSyncSummary(userId: string) {
-    const integration = await calendarRepository.findIntegration(userId);
-    const rows = await calendarRepository.getSyncSummary(userId);
+    const [integration, rows] = await Promise.all([
+        calendarRepository.findIntegration(userId),
+        calendarRepository.getSyncSummary(userId),
+    ]);
 
     const counts = rows.reduce<Record<string, number>>((acc, row) => {
         acc[row.syncStatus] = row._count.syncStatus;

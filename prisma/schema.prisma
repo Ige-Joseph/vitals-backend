@@ -181,6 +181,11 @@ model RefreshToken {
   revokedAt   DateTime?
   createdAt   DateTime  @default(now())
 
+  /// Hash of the token that superseded this one during rotation. Lets a
+  /// concurrent refresh (two browser tabs sharing one cookie) be recognised as
+  /// a benign race rather than token theft.
+  replacedByTokenHash String?
+
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -277,7 +282,7 @@ model CarePlan {
   pregnancyProfile   PregnancyProfile?
 
   @@index([userId, status])
-  @@index([userId, type])
+  @@index([userId, type, status])
   @@map("care_plans")
 }
 
@@ -298,7 +303,8 @@ model CareEvent {
 
   calendarLinks CalendarEventLink[]
 
-  @@index([carePlanId, status])
+  @@index([carePlanId, status, scheduledFor])
+  @@index([status, scheduledFor])
   @@index([scheduledFor])
   @@map("care_events")
 }
@@ -319,7 +325,7 @@ model Reminder {
   careEvent             CareEvent              @relation(fields: [careEventId], references: [id], onDelete: Cascade)
   notificationAttempts  NotificationAttempt[]
 
-  @@index([sendAt, status])
+  @@index([status, sendAt])
   @@map("reminders")
 }
 
@@ -349,8 +355,7 @@ model ActivityLog {
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
-  @@index([createdAt])
+  @@index([userId, createdAt])
   @@map("activity_logs")
 }
 
@@ -479,7 +484,7 @@ model SymptomLog {
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@map("symptom_logs")
 }
 
@@ -497,7 +502,7 @@ model DrugDetection {
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@map("drug_detections")
 }
 

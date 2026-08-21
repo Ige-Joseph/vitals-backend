@@ -124,6 +124,7 @@ describe('MotherBabyService', () => {
 
       (mockPrisma.$transaction as jest.Mock).mockImplementation(async (fn) =>
         fn({
+          careEvent: { findMany: jest.fn().mockResolvedValue([]) },
           carePlan: {
             update: jest.fn().mockResolvedValue(mockCarePlan),
             create: jest.fn().mockResolvedValue(babyPlan),
@@ -143,6 +144,34 @@ describe('MotherBabyService', () => {
       });
 
       expect(result).toBeDefined();
+    });
+  });
+
+  describe('getTimeline', () => {
+    it('limits upcoming ANC visits in the database query', async () => {
+      const lmpDate = new Date();
+      lmpDate.setDate(lmpDate.getDate() - 70);
+
+      mockMotherBabyRepo.findActivePregnancy.mockResolvedValue({
+        id: 'profile-1',
+        carePlanId: 'plan-1',
+        carePlan: mockCarePlan,
+        lmpDate,
+        currentWeek: 0,
+        expectedDeliveryDate: new Date(),
+      } as any);
+      mockMotherBabyRepo.updateCurrentWeek.mockResolvedValue({} as any);
+      mockCareRepo.listCareEvents.mockResolvedValue([]);
+
+      const result = await motherBabyService.getTimeline('user-1');
+
+      expect(mockCareRepo.listCareEvents).toHaveBeenCalledWith('user-1', {
+        status: 'PENDING',
+        type: 'ANC_VISIT',
+        limit: 3,
+      });
+      expect(mockMotherBabyRepo.updateCurrentWeek).toHaveBeenCalled();
+      expect(result.upcomingANCVisits).toEqual([]);
     });
   });
 

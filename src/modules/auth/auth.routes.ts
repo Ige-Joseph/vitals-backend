@@ -11,7 +11,7 @@ const router = Router();
  *   post:
  *     tags: [Auth]
  *     summary: Create a new user account
- *     description: Registers a new user, creates a refresh token, and returns an access token and refresh token.
+ *     description: Registers a user and issues an access token. Cookie-transport clients receive the refresh token in an HttpOnly cookie; legacy clients receive it in the response body.
  *     security: []
  *     requestBody:
  *       required: true
@@ -52,8 +52,8 @@ router.post('/signup', authRateLimiter, authController.signup);
  * /auth/login:
  *   post:
  *     tags: [Auth]
- *     summary: Authenticate user and return tokens
- *     description: Logs in an existing user and returns a new access token and refresh token.
+ *     summary: Authenticate user and create a session
+ *     description: Logs in an existing user. Cookie-transport clients receive the refresh token in an HttpOnly cookie; legacy clients receive it in the response body.
  *     security: []
  *     requestBody:
  *       required: true

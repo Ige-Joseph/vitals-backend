@@ -105,6 +105,7 @@ export const careRepository = {
       type?: string;
       from?: Date;
       to?: Date;
+      limit?: number;
     } = {},
   ) {
     return prisma.careEvent.findMany({
@@ -122,6 +123,7 @@ export const careRepository = {
           : {}),
       },
       orderBy: { scheduledFor: 'asc' },
+      ...(filters.limit !== undefined ? { take: filters.limit } : {}),
       include: { carePlan: { select: { type: true, title: true } } },
     });
   },

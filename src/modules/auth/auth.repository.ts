@@ -78,11 +78,18 @@ export const authRepository = {
     });
   },
 
-  revokeRefreshToken(tokenHash: string, tx?: Prisma.TransactionClient) {
+  revokeRefreshToken(
+    tokenHash: string,
+    tx?: Prisma.TransactionClient,
+    replacedByTokenHash?: string,
+  ) {
     const client = tx ?? prisma;
     return client.refreshToken.update({
       where: { tokenHash },
-      data: { revokedAt: new Date() },
+      data: {
+        revokedAt: new Date(),
+        ...(replacedByTokenHash ? { replacedByTokenHash } : {}),
+      },
     });
   },
 
