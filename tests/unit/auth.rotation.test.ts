@@ -194,5 +194,32 @@ describe('Refresh token rotation', () => {
       );
       expect(mockRepo.revokeAllUserRefreshTokens).toHaveBeenCalledWith(user.id);
     });
+
+    it('refuses a replacement chain that points at another user and rotates nothing', async () => {
+      const rawOld = 'rotated-token';
+      const rawForeign = 'another-users-token';
+
+      findRefreshToken.mockImplementation(async (tokenHash: string) => {
+        if (tokenHash === hash(rawOld)) {
+          return tokenRecord({
+            tokenHash: hash(rawOld),
+            revokedAt: secondsAgo(2),
+            replacedByTokenHash: hash(rawForeign),
+          }) as never;
+        }
+        return tokenRecord({
+          tokenHash: hash(rawForeign),
+          userId: 'user-2',
+          user: { ...user, id: 'user-2' },
+        }) as never;
+      });
+
+      await expect(authService.refresh(rawOld)).rejects.toThrow(
+        'Invalid or expired refresh token',
+      );
+      expect(mockRepo.revokeAllUserRefreshTokens).toHaveBeenCalledWith(user.id);
+      // The other user's live token must not be rotated or revoked.
+      expect(mockRepo.revokeRefreshToken).not.toHaveBeenCalled();
+    });
   });
 });

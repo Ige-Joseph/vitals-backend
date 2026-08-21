@@ -82,10 +82,11 @@ const MAX_ROTATION_CHAIN_HOPS = 5;
  * reuse described in OAuth 2.0 Security BCP section 4.14. This walks the
  * replacement chain so several tabs racing at once still resolve, and returns
  * the live token to rotate from. Anything outside the window — or any chain
- * ending in a revoked or expired token — returns null, and the caller revokes
- * the whole family as before.
+ * ending in a revoked, expired, or foreign token — returns null, and the caller
+ * revokes the whole family as before.
  */
 const findRotationGraceReplacement = async (stored: {
+  userId: string;
   revokedAt: Date | null;
   replacedByTokenHash: string | null;
 }) => {
@@ -96,6 +97,7 @@ const findRotationGraceReplacement = async (stored: {
   if (!withinGraceWindow(stored.revokedAt)) return null;
 
   let current: {
+    userId: string;
     revokedAt: Date | null;
     replacedByTokenHash: string | null;
   } = stored;
@@ -105,6 +107,12 @@ const findRotationGraceReplacement = async (stored: {
 
     const next = await authRepository.findRefreshToken(current.replacedByTokenHash);
     if (!next) return null;
+
+    // Replacement hashes are only ever written by this service, so a chain
+    // crossing users should be impossible. Refuse rather than rely on that:
+    // resolving here rotates the replacement, and rotating another user's
+    // token must never be reachable from one user's request.
+    if (next.userId !== stored.userId) return null;
 
     if (!next.revokedAt && next.expiresAt > new Date()) return next;
 
