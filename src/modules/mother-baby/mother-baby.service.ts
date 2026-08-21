@@ -155,19 +155,24 @@ export const motherBabyService = {
     const currentWeek = getWeekFromLMP(profile.lmpDate);
     const trimester = getTrimester(currentWeek);
 
-    if (currentWeek !== profile.currentWeek) {
-      await motherBabyRepository.updateCurrentWeek(
-        profile.carePlanId,
-        currentWeek,
-        trimester,
-      );
-    }
-
     const guidance = getGuidanceForWeek(currentWeek);
-    const upcomingANC = await careRepository.listCareEvents(userId, {
-      status: 'PENDING',
-      type: 'ANC_VISIT',
-    });
+    const weekUpdate =
+      currentWeek !== profile.currentWeek
+        ? motherBabyRepository.updateCurrentWeek(
+            profile.carePlanId,
+            currentWeek,
+            trimester,
+          )
+        : Promise.resolve(null);
+
+    const [, upcomingANC] = await Promise.all([
+      weekUpdate,
+      careRepository.listCareEvents(userId, {
+        status: 'PENDING',
+        type: 'ANC_VISIT',
+        limit: 3,
+      }),
+    ]);
 
     return {
       currentWeek,
@@ -175,7 +180,7 @@ export const motherBabyService = {
       expectedDeliveryDate: profile.expectedDeliveryDate,
       lmpDate: profile.lmpDate,
       guidance,
-      upcomingANCVisits: upcomingANC.slice(0, 3),
+      upcomingANCVisits: upcomingANC,
       allMilestones: ANC_MILESTONES,
     };
   },

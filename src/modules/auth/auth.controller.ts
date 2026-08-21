@@ -10,6 +10,25 @@ import {
 } from './auth.validators';
 import { created, ok, validationError } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
+import {
+  assertTrustedCookieAuthOrigin,
+  clearRefreshCookie,
+  readRefreshCookie,
+  setRefreshCookie,
+  usesCookieAuthTransport,
+} from './auth.cookies';
+
+const exposeAuthResult = <T extends { refreshToken: string }>(
+  req: Request,
+  res: Response,
+  result: T,
+): Omit<T, 'refreshToken'> | T => {
+  if (!usesCookieAuthTransport(req)) return result;
+
+  setRefreshCookie(res, result.refreshToken);
+  const { refreshToken: _refreshToken, ...safeResult } = result;
+  return safeResult;
+};
 
 export const authController = {
   async signup(req: Request, res: Response, next: NextFunction) {
@@ -19,8 +38,9 @@ export const authController = {
         return validationError(res, parsed.error.issues[0].message);
       }
 
+      assertTrustedCookieAuthOrigin(req);
       const result = await authService.signup(parsed.data);
-      return created(res, result, 'Account created successfully');
+      return created(res, exposeAuthResult(req, res, result), 'Account created successfully');
     } catch (err) {
       next(err);
     }
@@ -33,8 +53,9 @@ export const authController = {
         return validationError(res, parsed.error.issues[0].message);
       }
 
+      assertTrustedCookieAuthOrigin(req);
       const result = await authService.login(parsed.data);
-      return ok(res, result, 'Login successful');
+      return ok(res, exposeAuthResult(req, res, result), 'Login successful');
     } catch (err) {
       next(err);
     }
@@ -42,13 +63,21 @@ export const authController = {
 
   async refresh(req: Request, res: Response, next: NextFunction) {
     try {
+      assertTrustedCookieAuthOrigin(req);
+
       const parsed = refreshSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return validationError(res, parsed.error.issues[0].message);
+      const refreshToken = usesCookieAuthTransport(req)
+        ? readRefreshCookie(req) ?? (parsed.success ? parsed.data.refreshToken : undefined)
+        : parsed.success
+          ? parsed.data.refreshToken
+          : undefined;
+
+      if (!refreshToken) {
+        return validationError(res, 'Refresh token is required');
       }
 
-      const result = await authService.refresh(parsed.data.refreshToken);
-      return ok(res, result, 'Tokens refreshed');
+      const result = await authService.refresh(refreshToken);
+      return ok(res, exposeAuthResult(req, res, result), 'Tokens refreshed');
     } catch (err) {
       next(err);
     }
@@ -115,10 +144,19 @@ export const authController = {
 
   async logout(req: Request, res: Response, next: NextFunction) {
     try {
+      assertTrustedCookieAuthOrigin(req);
       const parsed = refreshSchema.safeParse(req.body);
-      if (parsed.success) {
-        await authService.logout(parsed.data.refreshToken);
+      const refreshToken = usesCookieAuthTransport(req)
+        ? readRefreshCookie(req) ?? (parsed.success ? parsed.data.refreshToken : undefined)
+        : parsed.success
+          ? parsed.data.refreshToken
+          : undefined;
+
+      if (refreshToken) {
+        await authService.logout(refreshToken);
       }
+
+      if (usesCookieAuthTransport(req)) clearRefreshCookie(res);
       return ok(res, null, 'Logged out successfully');
     } catch (err) {
       next(err);

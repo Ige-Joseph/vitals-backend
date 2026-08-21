@@ -7,6 +7,7 @@ import { env } from '@/config/env';
 import { swaggerSpec } from '@/config/swagger';
 import { globalRateLimiter } from '@/middleware/rate-limit.middleware';
 import { globalErrorHandler, notFoundHandler } from '@/middleware/error.middleware';
+import { requestTimingMiddleware } from '@/middleware/request-timing.middleware';
 import { createLogger } from '@/lib/logger';
 
 // Route imports
@@ -36,6 +37,10 @@ export const createApp = () => {
   // Trust Fly.io / reverse proxy so rate limiting and client IPs work correctly
   app.set('trust proxy', 1);
 
+  // Start timing before parsing, security, and rate-limit middleware so the log
+  // reflects the full API response time experienced by the client.
+  app.use(requestTimingMiddleware);
+
   // ─────────────────────────────────────────────
   // Security middleware
   // ─────────────────────────────────────────────
@@ -51,7 +56,7 @@ export const createApp = () => {
       origin: corsOrigin,
       credentials: env.CORS_ORIGIN === '*' ? false : true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Transport'],
     }),
   );
 
@@ -102,6 +107,14 @@ export const createApp = () => {
   // Routes
   // ─────────────────────────────────────────────
   const prefix = env.API_PREFIX;
+
+  // API responses can contain authentication, profile, and health data. They
+  // must not be stored by browsers, service workers, or intermediary caches.
+  app.use(prefix, (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    next();
+  });
 
   app.use(`${prefix}/health`, healthRoutes);
   app.use(`${prefix}/auth`, authRoutes);

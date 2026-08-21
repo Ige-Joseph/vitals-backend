@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { createApp } from '@/app';
 import { prisma } from '@/lib/prisma';
+import { env } from '@/config/env';
 
 // Mock heavy infrastructure so tests run without real DB/Redis
 jest.mock('@/lib/prisma', () => ({
@@ -79,6 +80,7 @@ describe('POST /api/v1/auth/signup', () => {
         },
         emailVerificationToken: { create: jest.fn() },
         outboxEvent: { create: jest.fn() },
+        refreshToken: { create: jest.fn() },
       }),
     );
 
@@ -86,13 +88,76 @@ describe('POST /api/v1/auth/signup', () => {
 
     const res = await request(app)
       .post('/api/v1/auth/signup')
-      .send({ email: 'test@example.com', password: 'Password1' });
+      .send({
+        firstName: 'Test',
+        lastName: 'User',
+        email: 'test@example.com',
+        password: 'Password1',
+      });
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.data).toHaveProperty('accessToken');
     expect(res.body.data).toHaveProperty('refreshToken');
     expect(res.body.data.user.emailVerified).toBe(false);
+  });
+
+  it('sets an HttpOnly refresh cookie and omits the token for cookie transport', async () => {
+    (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+
+    (mockPrisma.$transaction as jest.Mock).mockImplementation(async (fn) =>
+      fn({
+        user: {
+          create: jest.fn().mockResolvedValue({
+            id: 'user-456',
+            email: 'cookie@example.com',
+            firstName: 'Cookie',
+            lastName: 'User',
+            role: 'USER',
+            planType: 'FREE',
+            emailVerified: false,
+            isActive: true,
+          }),
+        },
+        emailVerificationToken: { create: jest.fn() },
+        outboxEvent: { create: jest.fn() },
+        refreshToken: { create: jest.fn() },
+      }),
+    );
+
+    const res = await request(app)
+      .post('/api/v1/auth/signup')
+      .set('Origin', env.FRONTEND_URL)
+      .set('X-Auth-Transport', 'cookie')
+      .send({
+        firstName: 'Cookie',
+        lastName: 'User',
+        email: 'cookie@example.com',
+        password: 'Password1',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data).toHaveProperty('accessToken');
+    expect(res.body.data).not.toHaveProperty('refreshToken');
+    expect(res.headers['set-cookie']?.[0]).toContain('vitals_refresh=');
+    expect(res.headers['set-cookie']?.[0]).toContain('HttpOnly');
+  });
+
+  it('rejects cookie transport from an untrusted browser origin', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/signup')
+      .set('Origin', 'https://attacker.example')
+      .set('X-Auth-Transport', 'cookie')
+      .send({
+        firstName: 'Test',
+        lastName: 'User',
+        email: 'test@example.com',
+        password: 'Password1',
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.errorCode).toBe('FORBIDDEN');
+    expect(res.headers['set-cookie']).toBeUndefined();
   });
 
   it('returns 409 for duplicate email', async () => {
@@ -103,7 +168,12 @@ describe('POST /api/v1/auth/signup', () => {
 
     const res = await request(app)
       .post('/api/v1/auth/signup')
-      .send({ email: 'test@example.com', password: 'Password1' });
+      .send({
+        firstName: 'Test',
+        lastName: 'User',
+        email: 'test@example.com',
+        password: 'Password1',
+      });
 
     expect(res.status).toBe(409);
     expect(res.body.errorCode).toBe('CONFLICT');
@@ -130,5 +200,6 @@ describe('GET /api/v1/health', () => {
     const res = await request(app).get('/api/v1/health');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(res.headers['cache-control']).toBe('no-store');
   });
 });

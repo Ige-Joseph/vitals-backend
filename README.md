@@ -10,7 +10,7 @@ A modular Node.js/TypeScript backend for the Vitals health companion app.
 | Framework | Express.js |
 | Language | TypeScript |
 | ORM | Prisma |
-| Database | PostgreSQL (NeonDB) |
+| Database | PostgreSQL (Supabase in production, Docker locally) |
 | Queue / Jobs | BullMQ + Upstash Redis |
 | Email | Brevo (SMTP) |
 | AI | Gemini 1.5 Flash |
@@ -35,12 +35,13 @@ cd vitals-backend
 npm install
 
 # 2. Start local Postgres and Redis
-docker-compose up -d
+docker compose up -d postgres redis
 
 # 3. Configure environment
 cp .env.example .env
 # Edit .env — local docker values are:
 #   DATABASE_URL=postgresql://vitals:vitals_local@localhost:5432/vitals_dev
+#   DIRECT_URL=postgresql://vitals:vitals_local@localhost:5432/vitals_dev
 #   REDIS_HOST=localhost
 #   REDIS_PORT=6379
 #   REDIS_PASSWORD=vitals_local
@@ -48,7 +49,7 @@ cp .env.example .env
 
 # 4. Run migrations and seed
 npx prisma generate
-npx prisma migrate dev --name init
+npx prisma migrate deploy
 npm run db:seed
 
 # 5. Start API and worker (two terminals)
@@ -76,6 +77,13 @@ npx prisma studio        # Open Prisma Studio GUI
 
 Swagger UI is available at `http://localhost:3000/api-docs` in development.
 
+Browser authentication uses an HttpOnly refresh cookie and an in-memory access
+token. See [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) for the request
+contract, deployment requirements, and legacy migration behavior.
+
+See [`docs/API_PERFORMANCE.md`](docs/API_PERFORMANCE.md) for local infrastructure,
+request timing, benchmarking, connection guidance, and query-plan verification.
+
 ---
 
 ## Deployment
@@ -98,22 +106,23 @@ flyctl apps create vitals-worker --config fly.worker.toml
 # Set secrets for API
 flyctl secrets set \
   DATABASE_URL="postgresql://..." \
+  DIRECT_URL="postgresql://..." \
   JWT_ACCESS_SECRET="..." \
   JWT_REFRESH_SECRET="..." \
   REDIS_HOST="..." \
   REDIS_PORT="6380" \
   REDIS_PASSWORD="..." \
   REDIS_TLS="true" \
-  BREVO_SMTP_HOST="smtp-relay.brevo.com" \
-  BREVO_SMTP_PORT="587" \
-  BREVO_SMTP_USER="..." \
-  BREVO_SMTP_PASS="..." \
-  EMAIL_FROM_ADDRESS="noreply@vitals.health" \
-  EMAIL_FROM_NAME="Vitals" \
+  BREVO_API_KEY="..." \
+  BREVO_FROM_EMAIL="noreply@vitals.health" \
+  BREVO_FROM_NAME="Vitals" \
   FRONTEND_URL="https://vitals.app" \
   API_URL="https://vitals-api.fly.dev" \
   CORS_ORIGIN="https://vitals.app" \
   GEMINI_API_KEY="..." \
+  GOOGLE_CLIENT_ID="..." \
+  GOOGLE_CLIENT_SECRET="..." \
+  GOOGLE_REDIRECT_URI="https://vitals-api.fly.dev/api/v1/calendar/google/callback" \
   VAPID_PUBLIC_KEY="..." \
   VAPID_PRIVATE_KEY="..." \
   VAPID_SUBJECT="mailto:admin@vitals.health" \
@@ -122,21 +131,22 @@ flyctl secrets set \
 # Copy same secrets to worker (shares most config)
 flyctl secrets set \
   DATABASE_URL="postgresql://..." \
+  DIRECT_URL="postgresql://..." \
   JWT_ACCESS_SECRET="..." \
   JWT_REFRESH_SECRET="..." \
   REDIS_HOST="..." \
   REDIS_PORT="6380" \
   REDIS_PASSWORD="..." \
   REDIS_TLS="true" \
-  BREVO_SMTP_HOST="smtp-relay.brevo.com" \
-  BREVO_SMTP_PORT="587" \
-  BREVO_SMTP_USER="..." \
-  BREVO_SMTP_PASS="..." \
-  EMAIL_FROM_ADDRESS="noreply@vitals.health" \
-  EMAIL_FROM_NAME="Vitals" \
+  BREVO_API_KEY="..." \
+  BREVO_FROM_EMAIL="noreply@vitals.health" \
+  BREVO_FROM_NAME="Vitals" \
   FRONTEND_URL="https://vitals.app" \
   API_URL="https://vitals-api.fly.dev" \
   CORS_ORIGIN="https://vitals.app" \
+  GOOGLE_CLIENT_ID="..." \
+  GOOGLE_CLIENT_SECRET="..." \
+  GOOGLE_REDIRECT_URI="https://vitals-api.fly.dev/api/v1/calendar/google/callback" \
   --config fly.worker.toml
 
 # Deploy
@@ -151,7 +161,8 @@ Set these in your repository Settings → Secrets → Actions:
 | Secret | Description |
 |---|---|
 | `FLY_API_TOKEN` | From `flyctl auth token` |
-| `DATABASE_URL` | NeonDB connection string |
+| `DATABASE_URL` | Supabase pooled PostgreSQL connection string |
+| `DIRECT_URL` | Supabase direct PostgreSQL connection string for migrations |
 | `JWT_ACCESS_SECRET` | Min 32 chars |
 | `JWT_REFRESH_SECRET` | Min 32 chars |
 | `CODECOV_TOKEN` | Optional — for coverage reports |

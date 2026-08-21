@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { jwtUtil } from '@/lib/jwt';
@@ -35,6 +34,7 @@ const issueTokenPair = async (
     planType: string;
   },
   tx?: PrismaTx,
+  replacesTokenHash?: string,
 ) => {
   const rawRefreshToken = generateOpaqueToken();
   const refreshTokenHash = hashToken(rawRefreshToken);
@@ -49,6 +49,12 @@ const issueTokenPair = async (
     tx,
   );
 
+  // Revoke the rotated token and record what replaced it, so a concurrent
+  // refresh presenting the old token can be resolved instead of rejected.
+  if (replacesTokenHash) {
+    await authRepository.revokeRefreshToken(replacesTokenHash, tx, refreshTokenHash);
+  }
+
   const accessToken = jwtUtil.signAccessToken({
     sub: user.id,
     email: user.email,
@@ -61,6 +67,54 @@ const issueTokenPair = async (
     accessToken,
     refreshToken: rawRefreshToken,
   };
+};
+
+const REFRESH_ROTATION_GRACE_MS = 30_000;
+const MAX_ROTATION_CHAIN_HOPS = 5;
+
+/**
+ * Refresh tokens are single-use, but every browser tab shares one refresh
+ * cookie and several can present the same token at nearly the same moment —
+ * on session restore, a double reload, or two tabs opened together.
+ *
+ * When the presented token was rotated moments ago and the token that
+ * superseded it is still live, that is a benign race rather than the token
+ * reuse described in OAuth 2.0 Security BCP section 4.14. This walks the
+ * replacement chain so several tabs racing at once still resolve, and returns
+ * the live token to rotate from. Anything outside the window — or any chain
+ * ending in a revoked or expired token — returns null, and the caller revokes
+ * the whole family as before.
+ */
+const findRotationGraceReplacement = async (stored: {
+  revokedAt: Date | null;
+  replacedByTokenHash: string | null;
+}) => {
+  const withinGraceWindow = (revokedAt: Date | null) =>
+    revokedAt !== null &&
+    Date.now() - revokedAt.getTime() <= REFRESH_ROTATION_GRACE_MS;
+
+  if (!withinGraceWindow(stored.revokedAt)) return null;
+
+  let current: {
+    revokedAt: Date | null;
+    replacedByTokenHash: string | null;
+  } = stored;
+
+  for (let hop = 0; hop < MAX_ROTATION_CHAIN_HOPS; hop += 1) {
+    if (!current.replacedByTokenHash) return null;
+
+    const next = await authRepository.findRefreshToken(current.replacedByTokenHash);
+    if (!next) return null;
+
+    if (!next.revokedAt && next.expiresAt > new Date()) return next;
+
+    // Keep walking only while each link was itself rotated inside the window.
+    if (!withinGraceWindow(next.revokedAt)) return null;
+
+    current = next;
+  }
+
+  return null;
 };
 
 export const authService = {
@@ -79,7 +133,7 @@ export const authService = {
 
     const passwordHash = await bcrypt.hash(data.password, BCRYPT_ROUNDS);
 
-    const rawVerificationToken = uuidv4();
+    const rawVerificationToken = crypto.randomUUID();
     const verificationTokenHash = hashToken(rawVerificationToken);
 
     const verificationExpiresAt = new Date();
@@ -201,15 +255,25 @@ export const authService = {
       throw AppError.unauthorized('Invalid or expired refresh token');
     }
 
+    let rotateFromTokenHash = tokenHash;
+
     if (stored.revokedAt || stored.expiresAt < new Date()) {
-      if (stored.userId) {
+      const replacement = await findRotationGraceReplacement(stored);
+
+      if (!replacement) {
         await authRepository.revokeAllUserRefreshTokens(stored.userId);
         log.warn('Refresh token reuse or expired token detected', {
           userId: stored.userId,
         });
+
+        throw AppError.unauthorized('Invalid or expired refresh token');
       }
 
-      throw AppError.unauthorized('Invalid or expired refresh token');
+      log.info('Concurrent refresh resolved within rotation grace window', {
+        userId: stored.userId,
+      });
+
+      rotateFromTokenHash = replacement.tokenHash;
     }
 
     const user = stored.user;
@@ -218,13 +282,9 @@ export const authService = {
       throw AppError.forbidden('Account is deactivated');
     }
 
-    const result = await prisma.$transaction(async (tx: PrismaTx) => {
-      await authRepository.revokeRefreshToken(tokenHash, tx);
-
-      const tokens = await issueTokenPair(user, tx);
-
-      return tokens;
-    });
+    const result = await prisma.$transaction((tx: PrismaTx) =>
+      issueTokenPair(user, tx, rotateFromTokenHash),
+    );
 
     return {
       user: {
@@ -330,7 +390,7 @@ export const authService = {
       return;
     }
 
-    const rawToken = uuidv4();
+    const rawToken = crypto.randomUUID();
     const tokenHash = hashToken(rawToken);
 
     const expiresAt = new Date();
@@ -403,5 +463,4 @@ export const authService = {
     };
   },
 };
-
 
