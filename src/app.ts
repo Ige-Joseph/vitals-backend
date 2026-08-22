@@ -34,7 +34,7 @@ const log = createLogger('app');
 export const createApp = () => {
   const app = express();
 
-  // Trust Fly.io / reverse proxy so rate limiting and client IPs work correctly
+  // Trust the Render reverse proxy so rate limiting and client IPs work correctly
   app.set('trust proxy', 1);
 
   // Start timing before parsing, security, and rate-limit middleware so the log

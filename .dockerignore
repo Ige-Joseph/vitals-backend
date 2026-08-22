@@ -9,5 +9,4 @@ coverage
 tests/
 *.md
 .DS_Store
-fly.*.toml
 docker-compose*.yml

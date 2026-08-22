@@ -98,8 +98,10 @@ request timing, benchmarking, connection guidance, and query-plan verification.
 
 Render deploys from `main`. Merging to `main` triggers a build.
 
-`fly.toml` and the `Dockerfile` are left over from an earlier Fly.io attempt and
-are not used by the current deployment.
+Render is configured through its dashboard — there is no `render.yaml` in the
+repository, so build and start commands are not visible here. The `Dockerfile`
+builds the API and is kept because Render may be building from it; confirm which
+before changing it.
 
 ### Required environment
 
