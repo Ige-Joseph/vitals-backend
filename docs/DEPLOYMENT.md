@@ -1,0 +1,92 @@
+# Deployment State and Known Issues
+
+Last verified: 2026-08-22, against the live services.
+
+## Topology
+
+```
+Browser ──▶ Vercel (frontend)  ──▶ Render (API + worker)  ──▶ Supabase (Postgres)
+                                                          └─▶ Upstash (Redis)
+```
+
+Both hosts deploy from `main` in their own repository. The two repositories are
+separate: `Ige-Joseph/vitals-backend` and `Ige-Joseph/vitals-frontend`.
+
+## Verified working
+
+Checked against `vitals-backend-service.onrender.com`:
+
+- Service healthy; database and Redis reachable
+- Cookie-transport auth live — an untrusted `Origin` is rejected with 403, a
+  trusted one passes the check
+- `replacedByTokenHash` migration applied; refresh returns 401 for an unknown
+  token rather than a 500
+- `Cache-Control: no-store` and `access-control-allow-credentials: true` present
+
+Reproduce with the commands in the README's "Verifying a deploy landed" section.
+
+## Open issues
+
+### Vercel is not deploying the frontend
+
+**The live frontend is a build from before 2026-05-12.** It predates the
+calendar integration, the profile redesign, and the login 401 fix, as well as
+everything merged since.
+
+Evidence: the served `index.html` still carries `theme-color #0f172a`, changed
+to `#005bbf` in commit `73506fb`. The served bundle contains none of
+`X-Auth-Transport`, `vitals:session-expired`, or `consumeLegacy`. `vercel.json`
+is not applied at all — no CSP header is returned, and `/dashboard` 404s, so
+even the SPA rewrite is missing.
+
+The code on `main` is correct. The deployment is not tracking it. Check in the
+Vercel dashboard whether the project is connected to the right repository,
+whether Production is set to `main`, whether builds are failing, and whether
+production is pinned to an old deployment.
+
+Until this is fixed, no frontend change reaches users, and any conclusion drawn
+from the live site is about a months-old build.
+
+### The worker may not be running
+
+`npm start` and the `Dockerfile` `CMD` both run `dist/server.js`, which starts
+the API only. `dist/main.js` runs the API and the worker together. If reminders
+and scheduled jobs are not firing, this is the first thing to check.
+
+### CI does nothing
+
+`.github/workflows/build.yml` is two bytes — a single line ending. Nothing runs
+on push, so nothing catches a broken build or a failing test before deploy.
+
+### Two unit suites fail
+
+Both predate the current work and are unrelated to it.
+
+- `medications.scheduler.test.ts` passes `'WEEKLY'`, which is not in
+  `FrequencyKey` (`ONCE_DAILY | TWICE_DAILY | THREE_TIMES_DAILY`). The test is
+  outdated, not the code.
+- `pregnancy.config.test.ts` expects week 10 where `getWeekFromLMP` returns 11.
+  The function deliberately returns a 1-indexed gestational week; the test
+  disagrees with that convention.
+
+Everything else passes: 53 of 56.
+
+## Safari and cookie transport
+
+The refresh cookie is `HttpOnly` and cross-site between `vercel.app` and
+`onrender.com`, and Safari blocks third-party cookies outright. The frontend
+therefore routes API calls through a same-origin Vercel proxy — see
+`docs/API_TRANSPORT.md` in the frontend repository.
+
+Custom domains sharing one registrable domain remove the need for the proxy and
+are the better fix. They also become a prerequisite if the PWA is ever packaged
+as an Android app, since a Trusted Web Activity verifies ownership through
+`/.well-known/assetlinks.json` on a domain you control.
+
+## Related documents
+
+| Document | Covers |
+|---|---|
+| [`AUTHENTICATION.md`](AUTHENTICATION.md) | Token model, cookie transport, rotation grace window |
+| [`AI_SAFETY.md`](AI_SAFETY.md) | AI posture, output guards, known limits |
+| [`API_PERFORMANCE.md`](API_PERFORMANCE.md) | Query timing, indexes, benchmarking |

@@ -12,10 +12,11 @@ A modular Node.js/TypeScript backend for the Vitals health companion app.
 | ORM | Prisma |
 | Database | PostgreSQL (Supabase in production, Docker locally) |
 | Queue / Jobs | BullMQ + Upstash Redis |
-| Email | Brevo (SMTP) |
-| AI | Gemini 1.5 Flash |
-| Deployment | Fly.io (API + Worker) |
-| CI/CD | GitHub Actions |
+| Email | Brevo (HTTP API) |
+| AI | Gemini 2.5 Flash (text + vision), AssemblyAI (voice) |
+| Push | Firebase Cloud Messaging |
+| Deployment | Render (API + worker), Vercel (frontend) |
+| CI/CD | None currently — the workflow file is empty |
 
 ---
 
@@ -88,84 +89,87 @@ request timing, benchmarking, connection guidance, and query-plan verification.
 
 ## Deployment
 
-### Fly.io setup (first time)
+| Component | Host |
+|---|---|
+| API + worker | Render — `vitals-backend-service.onrender.com` |
+| Frontend | Vercel |
+| Database | Supabase PostgreSQL |
+| Redis | Upstash |
+
+Render deploys from `main`. Merging to `main` triggers a build.
+
+`fly.toml` and the `Dockerfile` are left over from an earlier Fly.io attempt and
+are not used by the current deployment.
+
+### Required environment
+
+Set these in the Render dashboard. `.env.example` lists the full set with
+descriptions; these are the ones whose values are deployment-specific:
+
+| Variable | Note |
+|---|---|
+| `DATABASE_URL` | Supabase pooled connection string |
+| `DIRECT_URL` | Supabase direct connection, used for migrations |
+| `CORS_ORIGIN` | Exact frontend origins, comma separated. Never `*` — cookie auth rejects requests from origins not listed here |
+| `FRONTEND_URL` | Used alongside `CORS_ORIGIN` for cookie-transport origin checks |
+| `NODE_ENV` | Must be `production` so the refresh cookie is `Secure` |
+
+### Migrations
+
+Migrations must run before the new code serves traffic. Prisma selects every
+column it knows about, so deploying code ahead of its migration produces
+PostgreSQL `42703` errors on any table whose schema moved — for `RefreshToken`
+that takes down login, signup, refresh, and logout together.
+
+Confirm the build or start command runs `prisma migrate deploy`. `prisma` is in
+`dependencies`, not `devDependencies`, so it survives a production install.
+
+If migrations are not automated, this start command does both and also runs the
+worker, which `dist/server.js` alone does not:
 
 ```bash
-# Install flyctl
-curl -L https://fly.io/install.sh | sh
-
-# Login
-flyctl auth login
-
-# Create API app
-flyctl apps create vitals-api --config fly.api.toml
-
-# Create Worker app
-flyctl apps create vitals-worker --config fly.worker.toml
-
-# Set secrets for API
-flyctl secrets set \
-  DATABASE_URL="postgresql://..." \
-  DIRECT_URL="postgresql://..." \
-  JWT_ACCESS_SECRET="..." \
-  JWT_REFRESH_SECRET="..." \
-  REDIS_HOST="..." \
-  REDIS_PORT="6380" \
-  REDIS_PASSWORD="..." \
-  REDIS_TLS="true" \
-  BREVO_API_KEY="..." \
-  BREVO_FROM_EMAIL="noreply@vitals.health" \
-  BREVO_FROM_NAME="Vitals" \
-  FRONTEND_URL="https://vitals.app" \
-  API_URL="https://vitals-api.fly.dev" \
-  CORS_ORIGIN="https://vitals.app" \
-  GEMINI_API_KEY="..." \
-  GOOGLE_CLIENT_ID="..." \
-  GOOGLE_CLIENT_SECRET="..." \
-  GOOGLE_REDIRECT_URI="https://vitals-api.fly.dev/api/v1/calendar/google/callback" \
-  VAPID_PUBLIC_KEY="..." \
-  VAPID_PRIVATE_KEY="..." \
-  VAPID_SUBJECT="mailto:admin@vitals.health" \
-  --config fly.api.toml
-
-# Copy same secrets to worker (shares most config)
-flyctl secrets set \
-  DATABASE_URL="postgresql://..." \
-  DIRECT_URL="postgresql://..." \
-  JWT_ACCESS_SECRET="..." \
-  JWT_REFRESH_SECRET="..." \
-  REDIS_HOST="..." \
-  REDIS_PORT="6380" \
-  REDIS_PASSWORD="..." \
-  REDIS_TLS="true" \
-  BREVO_API_KEY="..." \
-  BREVO_FROM_EMAIL="noreply@vitals.health" \
-  BREVO_FROM_NAME="Vitals" \
-  FRONTEND_URL="https://vitals.app" \
-  API_URL="https://vitals-api.fly.dev" \
-  CORS_ORIGIN="https://vitals.app" \
-  GOOGLE_CLIENT_ID="..." \
-  GOOGLE_CLIENT_SECRET="..." \
-  GOOGLE_REDIRECT_URI="https://vitals-api.fly.dev/api/v1/calendar/google/callback" \
-  --config fly.worker.toml
-
-# Deploy
-flyctl deploy --config fly.api.toml
-flyctl deploy --config fly.worker.toml
+prisma migrate deploy && node -r module-alias/register dist/main.js
 ```
 
-### GitHub Actions secrets required
-
-Set these in your repository Settings → Secrets → Actions:
-
-| Secret | Description |
+| Entry point | Runs |
 |---|---|
-| `FLY_API_TOKEN` | From `flyctl auth token` |
-| `DATABASE_URL` | Supabase pooled PostgreSQL connection string |
-| `DIRECT_URL` | Supabase direct PostgreSQL connection string for migrations |
-| `JWT_ACCESS_SECRET` | Min 32 chars |
-| `JWT_REFRESH_SECRET` | Min 32 chars |
-| `CODECOV_TOKEN` | Optional — for coverage reports |
+| `dist/server.js` | API only |
+| `dist/worker.js` | Worker only |
+| `dist/main.js` | Both |
+
+### Verifying a deploy landed
+
+Do not infer from a green build that the running service changed. These checks
+confirm it against the live API:
+
+```bash
+API=https://vitals-backend-service.onrender.com
+
+# Service up, dependencies reachable
+curl -s $API/api/v1/health
+
+# Migration applied — 401 means the RefreshToken schema matches the code.
+# A 500 means a column is missing and auth is down.
+curl -s -X POST $API/api/v1/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken":"probe"}'
+
+# Cookie-transport origin check is enforced — expect 403
+curl -s -X POST $API/api/v1/auth/refresh \
+  -H 'X-Auth-Transport: cookie' -H 'Origin: https://untrusted.example' \
+  -H 'Content-Type: application/json' -d '{}'
+
+# A trusted origin gets past the origin check — expect 422, not 403
+curl -s -X POST $API/api/v1/auth/refresh \
+  -H 'X-Auth-Transport: cookie' -H 'Origin: <your frontend origin>' \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+### CI
+
+`.github/workflows/build.yml` exists but is empty, so nothing runs on push. Two
+unit suites are currently failing and unrelated to CI being absent — see the
+known issues in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ---
 
