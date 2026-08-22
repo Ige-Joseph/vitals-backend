@@ -6,6 +6,7 @@ import { ok, created, validationError } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
 import { geminiProvider } from '@/providers/ai/gemini.provider';
 import { quotaService } from '@/modules/usage/quota.service';
+import { ensureEscalationPath } from '@/lib/ai-safety';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('symptoms');
@@ -16,6 +17,13 @@ router.use(authenticate);
 const SYSTEM_INSTRUCTION = `You are a non-diagnostic health information assistant for a maternal and general health app.
 You provide general health information and guidance only — never diagnoses or prescriptions.
 Always include a disclaimer that users should consult a healthcare professional.
+
+Never state or imply that symptoms do not require professional evaluation, and
+never tell a user they are fine or have nothing to worry about. Even when
+symptoms appear minor, direct them to consult a professional if the symptoms
+persist, worsen, or concern them. Always populate seekCareIf with warning signs,
+whatever severity you assign.
+
 Respond ONLY with valid JSON — no markdown, no preamble.`;
 
 const symptomSchema = z.object({
@@ -130,12 +138,10 @@ Respond with a JSON object with exactly these fields:
         aiParsed.guidance &&
         Array.isArray(aiParsed.seekCareIf)
       ) {
-        aiResponse = {
-          ...aiParsed,
-          disclaimer:
-            aiParsed.disclaimer ||
-            'This is general information only and not a medical diagnosis. Please consult a qualified healthcare professional.',
-        };
+        // A low severity with an empty seekCareIf reads as an unqualified "you
+        // are fine". Guarantee a route to care regardless of what the model
+        // returned, so the assessment can escalate but never fully reassure.
+        aiResponse = ensureEscalationPath(aiParsed) as SymptomResponse;
       } else {
         usedFallback = true;
         log.warn('Gemini symptom response missing required fields — using fallback', {
