@@ -1,1 +1,123 @@
+name: CI
 
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+
+    # src/config/env.ts validates the environment at import time and calls
+    # process.exit(1) when a required variable is missing, so every non-optional
+    # variable needs a value here or nothing runs. These are throwaway values:
+    # the suites mock Prisma, Redis and every provider, so no test opens a real
+    # connection. Nothing secret belongs in this block.
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vitals_test
+      UPSTASH_REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-access-secret-not-used-to-sign-anything-real
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-used-to-sign-anything-real
+      BREVO_API_KEY: ci-placeholder
+      BREVO_FROM_EMAIL: ci@example.com
+      BREVO_FROM_NAME: Vitals CI
+      FRONTEND_URL: http://localhost:5173
+      API_URL: http://localhost:3000
+      CORS_ORIGIN: http://localhost:5173
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
+      GOOGLE_REDIRECT_URI: http://localhost:3000/api/v1/calendar/google/callback
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The Prisma client is generated, not committed. Typecheck and tests both
+      # fail on missing @prisma/client types without this.
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test -- --ci --maxWorkers=2
+
+      - name: Build
+        run: npm run build
+
+  db-tests:
+    name: Database-backed integration tests
+    runs-on: ubuntu-latest
+
+    # Real Postgres, real migrations, real queries. The suites in `tests/db`
+    # mock only Redis and the BullMQ registry — Prisma is genuinely connected,
+    # which is what makes a missing `where` clause detectable here and not in
+    # the mocked suites.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local
+          POSTGRES_DB: vitals_test
+        ports:
+          - 5436:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vitals_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://postgres:local@localhost:5436/vitals_test
+      # Overwritten per-process by tests/db/setup/test-env.ts; present so the
+      # env schema validates before that runs.
+      DATABASE_URL: postgresql://postgres:local@localhost:5436/vitals_test
+      UPSTASH_REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-access-secret-not-used-to-sign-anything-real
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-used-to-sign-anything-real
+      BREVO_API_KEY: ci-placeholder
+      BREVO_FROM_EMAIL: ci@example.com
+      BREVO_FROM_NAME: Vitals CI
+      FRONTEND_URL: http://localhost:5173
+      API_URL: http://localhost:3000
+      CORS_ORIGIN: http://localhost:5173
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
+      GOOGLE_REDIRECT_URI: http://localhost:3000/api/v1/calendar/google/callback
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      # Migrations are applied by the suite's globalSetup, so a schema drift
+      # fails the job rather than silently rewriting prisma/migrations.
+      - name: Database integration tests
+        run: npm run test:db -- --ci

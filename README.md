@@ -36,17 +36,17 @@ cd vitals-backend
 npm install
 
 # 2. Start local Postgres and Redis
-docker compose up -d postgres redis
+docker compose up -d --wait
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env — local docker values are:
-#   DATABASE_URL=postgresql://vitals:vitals_local@localhost:5432/vitals_dev
-#   DIRECT_URL=postgresql://vitals:vitals_local@localhost:5432/vitals_dev
-#   REDIS_HOST=localhost
-#   REDIS_PORT=6379
-#   REDIS_PASSWORD=vitals_local
-#   REDIS_TLS=false
+# Edit .env — local stack values are:
+#   DATABASE_URL=postgresql://postgres:local@localhost:5433/vitals
+#   DIRECT_URL=postgresql://postgres:local@localhost:5433/vitals
+#   UPSTASH_REDIS_URL=redis://localhost:6379
+#
+# Redis is configured by URL, not by host/port/password. Use the redis://
+# scheme locally — rediss:// enables TLS, which a local Redis does not speak.
 
 # 4. Run migrations and seed
 npx prisma generate
@@ -57,6 +57,48 @@ npm run db:seed
 npm run dev          # Terminal 1 — API server on :3000
 npm run dev:worker   # Terminal 2 — BullMQ worker process
 ```
+
+### Local stack
+
+`docker-compose.yml` runs **Postgres 16** on host port `5433` and **Redis 7** on
+`6379`, matching the values `.env` expects. Postgres is published on 5433 rather
+than 5432 so it cannot collide with another Postgres already on the host; inside
+the compose network it still listens on 5432.
+
+```bash
+docker compose up -d --wait   # start, blocking until both healthchecks pass
+docker compose ps             # check health and published ports
+docker compose logs -f postgres
+
+docker compose down           # stop, keeping the database
+docker compose down -v        # stop and destroy the database volume
+npm run db:reset              # drop, re-migrate and re-seed without recreating containers
+```
+
+Postgres data lives in the named volume `vitals-pgdata` and survives
+`docker compose down`. Only `down -v` destroys it. Redis is intentionally not
+persisted — locally, queued jobs are disposable, and dropping them between
+restarts is the behaviour you want.
+
+Seeding creates `admin@vitals.health` and `demo@vitals.health`; override with
+`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
+
+### Tests
+
+`npm test` runs the mocked suites and needs no containers.
+
+`npm run test:db` runs the database-backed suites in `tests/db` against a
+throwaway Postgres on port `5436`, with real queries and real migrations:
+
+```bash
+npm run test:db:up     # start the test database (profile "test", tmpfs, not persisted)
+npm run test:db        # migrate, then run tests/db — truncates between cases
+npm run test:db:down   # stop it
+```
+
+The harness refuses to start unless the target database name ends in `_test`,
+because it truncates every table between tests and the dev database is one
+digit away.
 
 ### Available scripts
 

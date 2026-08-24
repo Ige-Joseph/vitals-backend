@@ -6,5 +6,5 @@
     "rootDir": ".",
     "types": ["node", "jest"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "jest.config.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "jest.config.ts", "jest.db.config.ts"]
 }

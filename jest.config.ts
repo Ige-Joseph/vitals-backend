@@ -5,6 +5,9 @@ const config: Config = {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
+  // tests/db needs a live Postgres and has its own config (jest.db.config.ts).
+  // Excluded here so `npm test` stays runnable with no containers.
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/tests/db/'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.test.json' }],
   },

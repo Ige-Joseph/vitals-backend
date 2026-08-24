@@ -1,35 +1,96 @@
+# Local development stack for vitals-backend.
+#
+# Ports and credentials here are taken from .env and must stay in step with it:
+#   DATABASE_URL=postgresql://postgres:local@localhost:5433/vitals
+#
+# Postgres is published on 5433, not 5432, to avoid colliding with any
+# Postgres already installed on the host. Inside the compose network the
+# container still listens on 5432.
+#
+#   docker compose up -d      start
+#   docker compose down       stop, keeping data
+#   docker compose down -v    stop and destroy the database volume
+#
+# See the "Local development stack" section of README.md.
+
+name: vitals-local
+
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
+    container_name: vitals-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: vitals
-      POSTGRES_PASSWORD: vitals_local
-      POSTGRES_DB: vitals_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: vitals
     ports:
-      - '127.0.0.1:5432:5432'
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - vitals-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U vitals -d vitals_dev']
+      # Gates `docker compose up --wait` so migrations never race the server's
+      # first-boot initialisation.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vitals"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
+    container_name: vitals-redis
     restart: unless-stopped
-    command: ['redis-server', '--requirepass', 'vitals_local', '--save', '60', '1']
     ports:
-      - '127.0.0.1:6379:6379'
-    volumes:
-      - redis_data:/data
+      - "6379:6379"
+    # No password and no TLS: this is a loopback-only development instance.
+    # Persistence is off on purpose — dropping queued jobs between restarts is
+    # the behaviour you want locally, and only Postgres is asked to survive.
+    command: ["redis-server", "--appendonly", "no"]
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', 'vitals_local', 'ping']
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
-      retries: 10
+      timeout: 3s
+      retries: 12
+
+  # Database-backed integration tests. Started on demand, never by a bare
+  # `docker compose up` — it sits behind the "test" profile:
+  #
+  #   docker compose --profile test up -d --wait postgres-test
+  #
+  # Data lives in tmpfs, so it is fast and every container restart is a clean
+  # slate. Nothing here is persisted on purpose: the suite truncates between
+  # tests and re-applies migrations on start.
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: vitals-postgres-test
+    profiles: ["test"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: vitals_test
+      # Safe here and nowhere else — durability buys nothing for disposable data.
+      PGDATA: /var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    ports:
+      - "5436:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vitals_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
 volumes:
-  postgres_data:
-  redis_data:
+  vitals-pgdata:
+    name: vitals-pgdata

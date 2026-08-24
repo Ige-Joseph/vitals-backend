@@ -9,6 +9,10 @@ jest.mock('@/lib/prisma', () => ({
     $disconnect: jest.fn(),
     $queryRaw: jest.fn().mockResolvedValue([]),
     careEvent: { findMany: jest.fn().mockResolvedValue([]) },
+    carePlan: {
+      findMany: jest.fn().mockResolvedValue([]),
+      groupBy: jest.fn().mockResolvedValue([]),
+    },
     activityLog: { findMany: jest.fn().mockResolvedValue([]) },
     dailyUsage: { findUnique: jest.fn().mockResolvedValue(null) },
     moodLog: { findFirst: jest.fn().mockResolvedValue(null) },
