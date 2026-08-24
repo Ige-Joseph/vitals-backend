@@ -51,20 +51,6 @@ export const medicationRepository = {
   },
 
 
-  countActiveByUser(userId: string) {
-    return prisma.medication.count({
-      where: {
-        carePlan: {
-          userId,
-          status: {
-            not: 'COMPLETED',
-          },
-        },
-      },
-    });
-  },
-
-
 
 
 

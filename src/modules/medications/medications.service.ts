@@ -13,7 +13,6 @@ import type { PrismaTx } from '@/types/prisma';
 import { calendarService } from '@/modules/calendar/calendar.service';
 
 const log = createLogger('medications-service');
-const FREE_MEDICATION_PLAN_LIMIT = 5;
 
 export interface CreateMedicationInput {
   name: string;
@@ -38,14 +37,6 @@ const parseDateOnly = (value: string, fieldName: string): Date => {
 export const medicationsService = {
   async createMedication(userId: string, input: CreateMedicationInput) {
     const startDate = parseDateOnly(input.startDate, 'startDate');
-
-    const activeMedicationCount = await medicationRepository.countActiveByUser(userId);
-
-    if (activeMedicationCount >= FREE_MEDICATION_PLAN_LIMIT) {
-      throw AppError.badRequest(
-        `You can only create up to ${FREE_MEDICATION_PLAN_LIMIT} active medication plans for now`,
-      );
-    }
 
     let aiDraftIdToConfirm: string | undefined;
 
