@@ -22,7 +22,6 @@ enum PlanType {
   PREMIUM
 }
 
-
 enum Gender {
   MALE
   FEMALE
@@ -102,7 +101,6 @@ enum ArticleCategory {
   MENTAL_HEALTH
 }
 
-
 enum DraftStatus {
   IN_PROGRESS
   READY_FOR_REVIEW
@@ -134,88 +132,117 @@ enum CalendarSyncStatus {
 }
 
 // ─────────────────────────────────────────────
+// Person / Account separation — phase A
+// ─────────────────────────────────────────────
+
+enum PersonRole {
+  OWNER
+  CAREGIVER
+  VIEWER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  REVOKED
+}
+
+// ─────────────────────────────────────────────
 // Auth & User
 // ─────────────────────────────────────────────
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  firstName     String?
-  lastName      String?
-  passwordHash  String
-  role          Role      @default(USER)
-  planType      PlanType  @default(FREE)
-  emailVerified Boolean   @default(false)
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                  String               @id @default(uuid())
+  email               String               @unique
+  firstName           String?
+  lastName            String?
+  passwordHash        String
+  role                Role                 @default(USER)
+  planType            PlanType             @default(FREE)
+  emailVerified       Boolean              @default(false)
+  isActive            Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
   passwordResetTokens PasswordResetToken[]
 
+  // Entitlement — two independent axes, both account-level.
+  // Managed capacity is dependents this account created and still owns
+  // unclaimed; connection capacity is adults with their own account who have
+  // linked to it. A self-Person has ownerUserId set and consumes neither, so
+  // the free tier at 0/0 means "self only" rather than "no access".
+  // Ceiling on new only: an account that falls below its limit after a
+  // downgrade keeps every Person it already has.
+  managedPersonLimit Int @default(0)
+  connectionLimit    Int @default(0)
+
   // Relations
-  profile                  Profile?
-  carePlans                CarePlan[]
-  activityLogs             ActivityLog[]
-  symptomLogs              SymptomLog[]
-  drugDetections           DrugDetection[]
-  moodLogs                 MoodLog[]
-  dailyUsage               DailyUsage[]
-  pushSubscriptions        PushSubscription[]
-  pushTokens               PushToken[]
-  refreshTokens            RefreshToken[]
-  emailVerificationTokens  EmailVerificationToken[]
-  outboxEvents             OutboxEvent[]
-  medicationDrafts         MedicationDraft[]
+  profile                 Profile?
+  carePlans               CarePlan[]
+  activityLogs            ActivityLog[]
+  symptomLogs             SymptomLog[]
+  drugDetections          DrugDetection[]
+  moodLogs                MoodLog[]
+  dailyUsage              DailyUsage[]
+  pushSubscriptions       PushSubscription[]
+  pushTokens              PushToken[]
+  refreshTokens           RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  outboxEvents            OutboxEvent[]
+  medicationDrafts        MedicationDraft[]
 
   calendarIntegrations CalendarIntegration[]
   calendarEventLinks   CalendarEventLink[]
-  
+
+  // Person separation — phase A. No data is written to these yet.
+  ownedPersons      Person[]
+  personMemberships PersonMembership[]
+  actedActivityLogs ActivityLog[]      @relation("ActivityActor")
 
   @@map("users")
 }
 
 model RefreshToken {
-  id          String    @id @default(uuid())
-  userId      String
-  tokenHash   String    @unique
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  createdAt   DateTime  @default(now())
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
 
   /// Hash of the token that superseded this one during rotation. Lets a
   /// concurrent refresh (two browser tabs sharing one cookie) be recognised as
   /// a benign race rather than token theft.
   replacedByTokenHash String?
 
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("refresh_tokens")
 }
 
 model EmailVerificationToken {
-  id         String    @id @default(uuid())
-  userId     String
-  tokenHash  String    @unique
-  expiresAt  DateTime
-  usedAt     DateTime?
-  createdAt  DateTime  @default(now())
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("email_verification_tokens")
 }
 
-
 model PasswordResetToken {
-  id         String   @id @default(uuid())
-  userId     String
-  tokenHash  String   @unique
-  expiresAt  DateTime
-  usedAt     DateTime?
-  createdAt  DateTime @default(now())
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("password_reset_tokens")
@@ -226,40 +253,147 @@ model PasswordResetToken {
 // ─────────────────────────────────────────────
 
 model Profile {
-  id                      String    @id @default(uuid())
-  userId                  String    @unique
+  id     String @id @default(uuid())
+  userId String @unique
 
   // Basic
-  gender                  Gender?
-  country                 String?
-  city                    String?
-  phoneNumber             String?
-  dateOfBirth             DateTime?
-  profilePhotoUrl         String?
+  gender          Gender?
+  country         String?
+  city            String?
+  phoneNumber     String?
+  dateOfBirth     DateTime?
+  profilePhotoUrl String?
 
   // Medical
-  bloodGroup              String?
-  genotype                String?
-  heightCm                Float?
-  weightKg                Float?
-  allergies               String[]
-  existingConditions      String[]
-  currentMedications      String[]
-  disabilities            String[]
-  smokingStatus           String?
-  alcoholUse              String?
+  bloodGroup         String?
+  genotype           String?
+  heightCm           Float?
+  weightKg           Float?
+  allergies          String[]
+  existingConditions String[]
+  currentMedications String[]
+  disabilities       String[]
+  smokingStatus      String?
+  alcoholUse         String?
 
   // Existing
-  timezone                String    @default("Africa/Lagos")
-  notificationPreferences Json      @default("{}")
+  timezone                String   @default("Africa/Lagos")
+  notificationPreferences Json     @default("{}")
   selectedJourney         Journey?
 
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
+}
+
+// ─────────────────────────────────────────────
+// Person / Account separation — phase A (additive, no data written)
+//
+// A Person is the human whose health is recorded. It may exist with no account
+// at all — a baby, or a parent whose child manages their care. An account
+// reaches a Person only through PersonMembership, never by owning the clinical
+// rows.
+//
+// Phase A creates the structures and leaves them empty. Every clinical model
+// keeps its userId untouched and still authoritative; the nullable personId
+// columns added below are written in a later phase.
+// ─────────────────────────────────────────────
+
+model Person {
+  id          String    @id @default(uuid())
+  displayName String
+  dateOfBirth DateTime?
+  gender      Gender?
+
+  /// NULL means unclaimed. This single column is what separates a *managed*
+  /// Person (a dependent, consuming a managed slot on the account that owns
+  /// the OWNER membership) from a *connected* Person (an adult with their own
+  /// account, consuming a connection instead). Deriving it means the two can
+  /// never drift apart, and a claim frees the managed slot with no counter to
+  /// decrement.
+  ownerUserId String?
+  claimedAt   DateTime?
+
+  /// Provenance only — never read for authorization, and deliberately not a
+  /// foreign key so that erasing an account can null it without touching the
+  /// health records of anyone else.
+  createdByUserId String?
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  owner User? @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  memberships   PersonMembership[]
+  healthProfile PersonHealthProfile?
+
+  carePlans        CarePlan[]
+  symptomLogs      SymptomLog[]
+  moodLogs         MoodLog[]
+  drugDetections   DrugDetection[]
+  medicationDrafts MedicationDraft[]
+  activityLogs     ActivityLog[]
+
+  @@index([ownerUserId])
+  @@index([createdByUserId])
+  @@map("persons")
+}
+
+model PersonMembership {
+  id       String           @id @default(uuid())
+  personId String
+  userId   String
+  role     PersonRole       @default(VIEWER)
+  status   MembershipStatus @default(INVITED)
+
+  /// Modelled now, not built. Delivery is account-scoped: for a managed Person
+  /// the managing account receives the reminder. Connected-account routing is
+  /// out of scope, so only the managing OWNER is ever set true for now.
+  receivesNotifications Boolean @default(false)
+
+  invitedAt  DateTime  @default(now())
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([personId, userId])
+  @@index([userId, status])
+  @@index([personId, status, receivesNotifications])
+  @@map("person_memberships")
+}
+
+/// The clinical attributes that Profile currently pins to an account. Phase A
+/// creates this table empty; the columns on Profile stay exactly where they
+/// are and remain the source of truth until the compatibility window closes.
+model PersonHealthProfile {
+  id       String @id @default(uuid())
+  personId String @unique
+
+  bloodGroup         String?
+  genotype           String?
+  heightCm           Float?
+  weightKg           Float?
+  allergies          String[]
+  existingConditions String[]
+  currentMedications String[]
+  disabilities       String[]
+  smokingStatus      String?
+  alcoholUse         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@map("person_health_profiles")
 }
 
 // ─────────────────────────────────────────────
@@ -276,13 +410,20 @@ model CarePlan {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  careEvents         CareEvent[]
-  medication         Medication?
-  pregnancyProfile   PregnancyProfile?
+  /// Phase A: nullable and unwritten. userId above remains authoritative.
+  /// CareEvent, Reminder, NotificationAttempt, Medication and PregnancyProfile
+  /// reach the subject transitively through this row and need no column.
+  personId String?
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person           Person?           @relation(fields: [personId], references: [id])
+  careEvents       CareEvent[]
+  medication       Medication?
+  pregnancyProfile PregnancyProfile?
 
   @@index([userId, status])
   @@index([userId, type, status])
+  @@index([personId, status])
   @@map("care_plans")
 }
 
@@ -298,8 +439,8 @@ model CareEvent {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
-  carePlan   CarePlan    @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
-  reminders  Reminder[]
+  carePlan  CarePlan   @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
 
   calendarLinks CalendarEventLink[]
 
@@ -310,36 +451,36 @@ model CareEvent {
 }
 
 model Reminder {
-  id             String         @id @default(uuid())
-  careEventId    String
-  channel        ReminderChannel
-  sendAt         DateTime
-  status         ReminderStatus @default(PENDING)
-  retryCount     Int            @default(0)
-  lastAttemptAt  DateTime?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  processedAt    DateTime?
-  errorMessage   String?
+  id            String          @id @default(uuid())
+  careEventId   String
+  channel       ReminderChannel
+  sendAt        DateTime
+  status        ReminderStatus  @default(PENDING)
+  retryCount    Int             @default(0)
+  lastAttemptAt DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  processedAt   DateTime?
+  errorMessage  String?
 
-  careEvent             CareEvent              @relation(fields: [careEventId], references: [id], onDelete: Cascade)
-  notificationAttempts  NotificationAttempt[]
+  careEvent            CareEvent             @relation(fields: [careEventId], references: [id], onDelete: Cascade)
+  notificationAttempts NotificationAttempt[]
 
   @@index([status, sendAt])
   @@map("reminders")
 }
 
 model NotificationAttempt {
-  id             String                     @id @default(uuid())
+  id             String                    @id @default(uuid())
   reminderId     String
   channel        ReminderChannel
   type           NotificationAttemptType
   status         NotificationAttemptStatus
-  idempotencyKey String                     @unique
-  attemptedAt    DateTime                   @default(now())
+  idempotencyKey String                    @unique
+  attemptedAt    DateTime                  @default(now())
   errorMessage   String?
 
-  reminder  Reminder  @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  reminder Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
 
   @@index([reminderId])
   @@map("notification_attempts")
@@ -353,9 +494,20 @@ model ActivityLog {
   metadata  Json     @default("{}")
   createdAt DateTime @default(now())
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Two columns because this table is genuinely two things: the dashboard
+  /// reads it as "what happened to this person", and writers record "who did
+  /// it". A caregiver acting for a dependent must appear in the dependent's
+  /// history, attributed to the caregiver. Both nullable and unwritten in
+  /// phase A. This is not an access log — consent lives elsewhere.
+  personId    String?
+  actorUserId String?
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person? @relation(fields: [personId], references: [id])
+  actor  User?   @relation("ActivityActor", fields: [actorUserId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([personId, createdAt])
   @@map("activity_logs")
 }
 
@@ -376,7 +528,7 @@ model OutboxEvent {
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
-  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@map("outbox_events")
@@ -387,18 +539,18 @@ model OutboxEvent {
 // ─────────────────────────────────────────────
 
 model Medication {
-  id           String   @id @default(uuid())
-  carePlanId   String   @unique
+  id           String    @id @default(uuid())
+  carePlanId   String    @unique
   name         String
   dosage       String
   frequency    String
   startDate    DateTime
   endDate      DateTime?
   instructions String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  carePlan  CarePlan  @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  carePlan CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
 
   @@map("medications")
 }
@@ -406,7 +558,6 @@ model Medication {
 // ─────────────────────────────────────────────
 // AI Medications
 // ─────────────────────────────────────────────
-
 
 model MedicationDraft {
   id            String      @id @default(uuid())
@@ -423,11 +574,16 @@ model MedicationDraft {
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Phase A: nullable and unwritten.
+  personId String?
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person? @relation(fields: [personId], references: [id])
 
   @@index([userId, status])
   @@index([status])
   @@index([expiresAt])
+  @@index([personId])
   @@map("medication_drafts")
 }
 
@@ -436,17 +592,17 @@ model MedicationDraft {
 // ─────────────────────────────────────────────
 
 model PregnancyProfile {
-  id                    String   @id @default(uuid())
-  carePlanId            String   @unique
-  lmpDate               DateTime
-  pregnancyWeekAtSetup  Int
-  currentWeek           Int
-  trimester             Int
-  expectedDeliveryDate  DateTime
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  carePlanId           String   @unique
+  lmpDate              DateTime
+  pregnancyWeekAtSetup Int
+  currentWeek          Int
+  trimester            Int
+  expectedDeliveryDate DateTime
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  carePlan  CarePlan  @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  carePlan CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
 
   @@map("pregnancy_profiles")
 }
@@ -464,9 +620,14 @@ model MoodLog {
   loggedAt  DateTime @default(now())
   createdAt DateTime @default(now())
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Phase A: nullable and unwritten.
+  personId String?
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person? @relation(fields: [personId], references: [id])
 
   @@index([userId, loggedAt])
+  @@index([personId, loggedAt])
   @@map("mood_logs")
 }
 
@@ -482,9 +643,14 @@ model SymptomLog {
   aiResponse   Json?
   createdAt    DateTime @default(now())
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Phase A: nullable and unwritten.
+  personId String?
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person? @relation(fields: [personId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([personId, createdAt])
   @@map("symptom_logs")
 }
 
@@ -500,9 +666,14 @@ model DrugDetection {
   aiResponse   Json?
   createdAt    DateTime @default(now())
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Phase A: nullable and unwritten.
+  personId String?
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person? @relation(fields: [personId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([personId, createdAt])
   @@map("drug_detections")
 }
 
@@ -511,15 +682,15 @@ model DrugDetection {
 // ─────────────────────────────────────────────
 
 model DailyUsage {
-  id                  String   @id @default(uuid())
-  userId              String
-  date                DateTime @db.Date
-  symptomChecksUsed   Int      @default(0)
-  drugDetectionsUsed  Int      @default(0)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  userId             String
+  date               DateTime @db.Date
+  symptomChecksUsed  Int      @default(0)
+  drugDetectionsUsed Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date])
   @@index([userId, date])
@@ -531,16 +702,16 @@ model DailyUsage {
 // ─────────────────────────────────────────────
 
 model PushSubscription {
-  id          String   @id @default(uuid())
-  userId      String
-  endpoint    String   @unique
-  p256dhKey   String
-  authKey     String
-  deviceInfo  Json     @default("{}")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(uuid())
+  userId     String
+  endpoint   String   @unique
+  p256dhKey  String
+  authKey    String
+  deviceInfo Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("push_subscriptions")
@@ -557,7 +728,7 @@ model PushToken {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("push_tokens")
@@ -568,23 +739,22 @@ model PushToken {
 // ─────────────────────────────────────────────
 
 model Article {
-  id           String          @id @default(uuid())
-  title        String
-  slug         String          @unique
-  excerpt      String
-  content      String
-  imageUrl     String?
-  category     ArticleCategory @default(GENERAL)
-  isPublished  Boolean         @default(false)
-  publishedAt  DateTime?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id          String          @id @default(uuid())
+  title       String
+  slug        String          @unique
+  excerpt     String
+  content     String
+  imageUrl    String?
+  category    ArticleCategory @default(GENERAL)
+  isPublished Boolean         @default(false)
+  publishedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@index([category, isPublished])
   @@index([slug])
   @@map("articles")
 }
-
 
 // ─────────────────────────────────────────────
 // Calendar
@@ -608,21 +778,26 @@ model CalendarIntegration {
 }
 
 model CalendarEventLink {
-  id                  String             @id @default(uuid())
-  userId              String
-  careEventId         String
-  provider            CalendarProvider   @default(GOOGLE)
-  externalEventId     String?
-  syncStatus          CalendarSyncStatus @default(PENDING)
-  lastSyncAttemptAt   DateTime?
-  lastSyncError       String?
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  id                String             @id @default(uuid())
+  userId            String
+  careEventId       String
+  provider          CalendarProvider   @default(GOOGLE)
+  externalEventId   String?
+  syncStatus        CalendarSyncStatus @default(PENDING)
+  lastSyncAttemptAt DateTime?
+  lastSyncError     String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   careEvent CareEvent @relation(fields: [careEventId], references: [id], onDelete: Cascade)
 
-  @@unique([careEventId, provider])
+  /// Widened to include userId. One link per event per provider would allow
+  /// only a single account to sync a given care event; once two accounts can
+  /// see one Person, each needs its own link row, its own external event and
+  /// its own sync lifecycle, because they hold different OAuth grants.
+  /// Widening now avoids rebuilding this index later under load.
+  @@unique([careEventId, provider, userId])
   @@index([userId, syncStatus])
   @@index([careEventId, syncStatus])
   @@map("calendar_event_links")
