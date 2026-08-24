@@ -48,9 +48,11 @@ export const generateMedicationSchedule = (input: GenerateScheduleInput): Schedu
   const times = customTimes?.length ? customTimes : definition.defaultTimes;
   const doses: ScheduledDose[] = [];
 
-  // Clamp end date to MAX_SCHEDULE_DAYS from start
+  // Clamp end date to MAX_SCHEDULE_DAYS from start. The day loop below is
+  // inclusive of both ends, so the span is MAX_SCHEDULE_DAYS - 1 past the
+  // start date -- adding the full count would schedule one day too many.
   const maxEnd = new Date(startDate);
-  maxEnd.setDate(maxEnd.getDate() + MAX_SCHEDULE_DAYS);
+  maxEnd.setDate(maxEnd.getDate() + MAX_SCHEDULE_DAYS - 1);
 
   const effectiveEnd = endDate < maxEnd ? endDate : maxEnd;
 

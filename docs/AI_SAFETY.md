@@ -67,8 +67,20 @@ they cannot be dropped by a client.
 ## Quotas
 
 AI use is metered per user per day and enforced server-side by
-`quotaService.checkAndIncrement` before every model call, atomically. See
+`quotaService.checkAndIncrement` before every model call. See
 `src/modules/usage/`.
+
+The increment is a single conditional update — in effect `SET used = used + 1
+WHERE used < limit` — so two requests arriving together serialise on the row and
+the loser re-evaluates the limit against the committed count. `count === 0`
+means the limit was genuinely reached; there is no window in which both callers
+read the same count and both increment. Same claim-then-process shape as
+`careRepository.claimReminder`.
+
+Limits come from the environment (`FREE_*` and `PREMIUM_*` per day) and the plan
+comes from the JWT, so a plan change only takes effect once the access token is
+refreshed. Anything that sells a higher limit has to force that rotation or read
+the plan from the database instead.
 
 ## Known limits
 

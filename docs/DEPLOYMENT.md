@@ -53,23 +53,33 @@ from the live site is about a months-old build.
 the API only. `dist/main.js` runs the API and the worker together. If reminders
 and scheduled jobs are not firing, this is the first thing to check.
 
-### CI does nothing
+### The Vercel dashboard environment is outside CI's reach
 
-`.github/workflows/build.yml` is two bytes — a single line ending. Nothing runs
-on push, so nothing catches a broken build or a failing test before deploy.
+CI builds the frontend with `VITE_API_URL` unset, which is what keeps requests
+same-origin. It cannot see the environment variables configured in the Vercel
+dashboard, so a `VITE_API_URL` added there breaks Safari with CI fully green.
+That invariant is enforced by review, not by a check — see `API_TRANSPORT.md`
+in the frontend repository.
 
-### Two unit suites fail
+## Continuous integration
 
-Both predate the current work and are unrelated to it.
+Both repositories run a `CI` workflow on push to `main` and on pull requests
+against it.
 
-- `medications.scheduler.test.ts` passes `'WEEKLY'`, which is not in
-  `FrequencyKey` (`ONCE_DAILY | TWICE_DAILY | THREE_TIMES_DAILY`). The test is
-  outdated, not the code.
-- `pregnancy.config.test.ts` expects week 10 where `getWeekFromLMP` returns 11.
-  The function deliberately returns a 1-indexed gestational week; the test
-  disagrees with that convention.
+| Repository | Steps |
+|---|---|
+| `vitals-backend` | `npm ci` → `prisma generate` → typecheck → tests → build |
+| `vitals-frontend` | `npm ci` → build (`tsc && vite build`) |
 
-Everything else passes: 53 of 56.
+The backend job supplies throwaway values for every variable `src/config/env.ts`
+requires, because that module validates the environment at import time and calls
+`process.exit(1)` when something is missing — without them no test would run.
+The suites mock Prisma, Redis and every provider, so CI needs no database and no
+Redis instance.
+
+The frontend has a `lint` script left over from the Vite template that calls
+`eslint`, which is neither installed nor configured. CI does not run it. Adding
+a linter is a separate decision from wiring up CI.
 
 ## Safari and cookie transport
 

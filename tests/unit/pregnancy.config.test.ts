@@ -43,15 +43,15 @@ describe('Pregnancy config utilities', () => {
   describe('getWeekFromLMP', () => {
     it('returns correct week for a known LMP', () => {
       const lmp = new Date();
-      lmp.setDate(lmp.getDate() - 70); // 10 weeks ago
+      lmp.setDate(lmp.getDate() - 70); // 70 days = 10 completed weeks
       const week = getWeekFromLMP(lmp);
-      expect(week).toBe(10);
+      expect(week).toBe(11); // gestational weeks are 1-indexed
     });
 
-    it('returns 0 for today LMP', () => {
+    it('returns week 1 for today LMP', () => {
       const lmp = new Date();
       const week = getWeekFromLMP(lmp);
-      expect(week).toBe(0);
+      expect(week).toBe(1);
     });
   });
 
@@ -80,10 +80,11 @@ describe('Pregnancy config utilities', () => {
       expect(remaining.length).toBe(0);
     });
 
-    it('only returns milestones for future weeks', () => {
+    it('drops passed milestones but keeps the one due this week', () => {
       const currentWeek = 24;
       const remaining = getRemainingANCMilestones(currentWeek);
-      remaining.forEach((m) => expect(m.weekNumber).toBeGreaterThan(currentWeek));
+      remaining.forEach((m) => expect(m.weekNumber).toBeGreaterThanOrEqual(currentWeek));
+      expect(remaining.some((m) => m.weekNumber === currentWeek)).toBe(true);
     });
   });
 

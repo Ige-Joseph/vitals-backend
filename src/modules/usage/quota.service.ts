@@ -30,40 +30,43 @@ export const quotaService = {
   async checkAndIncrement(userId: string, planType: string, feature: QuotaFeature): Promise<void> {
     const today = getToday();
     const limit = getLimit(planType, feature);
-    const field =
-      feature === 'symptomCheck' ? 'symptomChecksUsed' : 'drugDetectionsUsed';
+    const field = feature === 'symptomCheck' ? 'symptomChecksUsed' : 'drugDetectionsUsed';
 
-    // Upsert today's usage row, then atomically increment
-    const usage = await prisma.$transaction(async (tx: any) => {
-      // Ensure row exists
-      await tx.dailyUsage.upsert({
+    // Ensure today's row exists. Two first-calls of the day can both find it
+    // missing, so whichever loses the insert race is treated as a success —
+    // the row it needed is there either way.
+    try {
+      await prisma.dailyUsage.upsert({
         where: { userId_date: { userId, date: today } },
         create: { userId, date: today },
         update: {},
       });
+    } catch (err) {
+      if ((err as any).code !== 'P2002') throw err;
+    }
 
-      // Read current count
-      const current = await tx.dailyUsage.findUnique({
-        where: { userId_date: { userId, date: today } },
-        select: { [field]: true },
-      });
-
-      const currentCount = (current as any)[field] as number;
-
-      if (currentCount >= limit) {
-        throw AppError.quotaExceeded(
-          `You have reached your daily limit of ${limit} ${feature === 'symptomCheck' ? 'symptom checks' : 'drug detections'}. Upgrade to premium for higher limits.`,
-        );
-      }
-
-      // Increment
-      return tx.dailyUsage.update({
-        where: { userId_date: { userId, date: today } },
-        data: { [field]: { increment: 1 } },
-      });
+    // Claim one unit against the limit in a single conditional update, the way
+    // claimReminder claims a reminder. Concurrent callers serialise on the row
+    // and re-evaluate the limit after the winner commits, so count === 0 means
+    // the limit really was reached — never a lost update.
+    const claimed = await prisma.dailyUsage.updateMany({
+      where:
+        feature === 'symptomCheck'
+          ? { userId, date: today, symptomChecksUsed: { lt: limit } }
+          : { userId, date: today, drugDetectionsUsed: { lt: limit } },
+      data:
+        feature === 'symptomCheck'
+          ? { symptomChecksUsed: { increment: 1 } }
+          : { drugDetectionsUsed: { increment: 1 } },
     });
 
-    log.info('Quota incremented', { userId, feature, field, newValue: (usage as any)[field] });
+    if (claimed.count === 0) {
+      throw AppError.quotaExceeded(
+        `You have reached your daily limit of ${limit} ${feature === 'symptomCheck' ? 'symptom checks' : 'drug detections'}. Upgrade to premium for higher limits.`,
+      );
+    }
+
+    log.info('Quota claimed', { userId, feature, field, limit });
   },
 
   async getUsage(userId: string, planType: string) {

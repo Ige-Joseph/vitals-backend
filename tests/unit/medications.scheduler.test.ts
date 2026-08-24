@@ -1,4 +1,5 @@
 import { generateMedicationSchedule } from '@/modules/medications/medications.scheduler';
+import { MAX_SCHEDULE_DAYS } from '@/config/medication.config';
 
 const today = new Date();
 today.setHours(0, 0, 0, 0);
@@ -17,11 +18,6 @@ const baseInput = {
 };
 
 describe('generateMedicationSchedule', () => {
-  it('returns empty array for AS_NEEDED frequency', () => {
-    const result = generateMedicationSchedule({ ...baseInput, frequency: 'AS_NEEDED' });
-    expect(result).toHaveLength(0);
-  });
-
   it('generates correct dose count for ONCE_DAILY over 7 days', () => {
     const result = generateMedicationSchedule({ ...baseInput, frequency: 'ONCE_DAILY' });
     // 7 days inclusive: tomorrow through in7Days = 7 doses
@@ -67,12 +63,7 @@ describe('generateMedicationSchedule', () => {
       endDate: farFuture,
     });
 
-    expect(result.length).toBeLessThanOrEqual(365);
-  });
-
-  it('generates one dose per week for WEEKLY', () => {
-    const result = generateMedicationSchedule({ ...baseInput, frequency: 'WEEKLY' });
-    expect(result.length).toBe(1); // 7-day window = 1 weekly dose
+    expect(result.length).toBe(MAX_SCHEDULE_DAYS);
   });
 
   it('all scheduled doses are in the future', () => {
