@@ -147,6 +147,29 @@ enum MembershipStatus {
   REVOKED
 }
 
+/// What happened to someone's access to a Person's health data. Append-only —
+/// see PersonAccessEvent.
+enum AccessAction {
+  GRANTED
+  ACCEPTED
+  CLAIMED
+  REVOKED
+  TRANSFERRED
+  ARCHIVED
+  ERASED
+}
+
+/// Where an account erasure request has got to. Erasure is a state machine,
+/// not an instant operation, because an account that is the sole OWNER of an
+/// unclaimed Person cannot be erased without first resolving that Person.
+enum ErasureStatus {
+  REQUESTED
+  BLOCKED
+  READY
+  EXECUTED
+  CANCELLED
+}
+
 // ─────────────────────────────────────────────
 // Auth & User
 // ─────────────────────────────────────────────
@@ -174,6 +197,20 @@ model User {
   // downgrade keeps every Person it already has.
   managedPersonLimit Int @default(0)
   connectionLimit    Int @default(0)
+
+  /// Erasure is field-level destruction plus a tombstone, not a row delete.
+  /// The row survives carrying no personal data, so Restrict on the clinical
+  /// foreign keys never has to be defeated and other people's history keeps
+  /// its shape.
+  ///
+  /// The email column stays NOT NULL and is overwritten with an unusable
+  /// sentinel rather than set to NULL — making it nullable would change
+  /// User.email to `string | null` across the whole auth layer for no gain.
+  /// The original address is destroyed either way, and freed for re-signup
+  /// because the unique value changes.
+  erasedAt             DateTime?
+  erasureStatus        ErasureStatus?
+  erasureBlockedReason String?
 
   // Relations
   profile                 Profile?
@@ -331,14 +368,22 @@ model Person {
   memberships   PersonMembership[]
   healthProfile PersonHealthProfile?
 
-  carePlans        CarePlan[]
-  symptomLogs      SymptomLog[]
-  moodLogs         MoodLog[]
-  drugDetections   DrugDetection[]
-  medicationDrafts MedicationDraft[]
-  activityLogs     ActivityLog[]
+  carePlans          CarePlan[]
+  symptomLogs        SymptomLog[]
+  moodLogs           MoodLog[]
+  drugDetections     DrugDetection[]
+  medicationDrafts   MedicationDraft[]
+  activityLogs       ActivityLog[]
+  personAccessEvents PersonAccessEvent[]
 
-  @@index([ownerUserId])
+  /// "Exactly one self-Person per account" as a database constraint rather
+  /// than something a verification query notices afterwards. Postgres treats
+  /// NULLs as distinct in a unique index, so any number of *unclaimed* Persons
+  /// coexist while an account can own at most one — which is precisely the
+  /// rule. A partial index (WHERE "ownerUserId" IS NOT NULL) would be
+  /// equivalent but is not expressible in the Prisma schema, and raw SQL for
+  /// it would read as drift on the next migrate.
+  @@unique([ownerUserId])
   @@index([createdByUserId])
   @@map("persons")
 }
@@ -396,6 +441,44 @@ model PersonHealthProfile {
   @@map("person_health_profiles")
 }
 
+/// The consent ledger. Append-only: rows are inserted, never updated or
+/// deleted.
+///
+/// PersonMembership.status records the *current* state and overwrites itself
+/// on every transition, so it cannot answer "who was granted what, by whom,
+/// when, and when was it revoked". Revocation has to be recorded rather than
+/// erased, and ActivityLog is a user-facing feed, not an access log.
+///
+/// Erasing an account nulls the user references here but keeps the rows: a
+/// person's record of who had access to their health data is that person's
+/// data, not solely the erased account's.
+model PersonAccessEvent {
+  id       String @id @default(uuid())
+  personId String
+
+  /// The account gaining or losing access.
+  subjectUserId String?
+
+  /// Who performed the action. Null for system actions and after erasure.
+  actorUserId String?
+
+  action AccessAction
+  role   PersonRole?
+
+  /// Why this was permitted: 'owner-invite', 'self-claim', 'handoff',
+  /// 'erasure', 'backfill'.
+  basis String
+
+  metadata   Json     @default("{}")
+  occurredAt DateTime @default(now())
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@index([personId, occurredAt])
+  @@index([subjectUserId, occurredAt])
+  @@map("person_access_events")
+}
+
 // ─────────────────────────────────────────────
 // Care Engine
 // ─────────────────────────────────────────────
@@ -415,8 +498,8 @@ model CarePlan {
   /// reach the subject transitively through this row and need no column.
   personId String?
 
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person           Person?           @relation(fields: [personId], references: [id])
+  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  person           Person?           @relation(fields: [personId], references: [id], onDelete: Restrict)
   careEvents       CareEvent[]
   medication       Medication?
   pregnancyProfile PregnancyProfile?
@@ -502,9 +585,9 @@ model ActivityLog {
   personId    String?
   actorUserId String?
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person Person? @relation(fields: [personId], references: [id])
-  actor  User?   @relation("ActivityActor", fields: [actorUserId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  person Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
+  actor  User?   @relation("ActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
   @@index([personId, createdAt])
@@ -577,8 +660,8 @@ model MedicationDraft {
   /// Phase A: nullable and unwritten.
   personId String?
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person Person? @relation(fields: [personId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  person Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([userId, status])
   @@index([status])
@@ -623,8 +706,8 @@ model MoodLog {
   /// Phase A: nullable and unwritten.
   personId String?
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person Person? @relation(fields: [personId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  person Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([userId, loggedAt])
   @@index([personId, loggedAt])
@@ -646,8 +729,8 @@ model SymptomLog {
   /// Phase A: nullable and unwritten.
   personId String?
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person Person? @relation(fields: [personId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  person Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([userId, createdAt])
   @@index([personId, createdAt])
@@ -669,8 +752,8 @@ model DrugDetection {
   /// Phase A: nullable and unwritten.
   personId String?
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person Person? @relation(fields: [personId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  person Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@index([userId, createdAt])
   @@index([personId, createdAt])

@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { careRepository } from '@/modules/care/care.repository';
+import { recipientResolver } from '@/modules/care/recipient.resolver';
 import { outboxRepository } from '@/modules/outbox/outbox.repository';
 import { pushProvider } from '@/providers/push/push.provider';
 import { adherenceQueue, JOB_NAMES } from '@/queues/queue.registry';
@@ -64,7 +65,6 @@ export const reminderEngine = {
 
     const careEvent = freshReminder.careEvent;
     const carePlan = careEvent.carePlan;
-    const user = carePlan.user;
 
     if (carePlan.status !== 'ACTIVE' || careEvent.status !== 'PENDING') {
       await careRepository.updateReminderStatus(reminderId, 'CANCELLED');
@@ -77,6 +77,23 @@ export const reminderEngine = {
     }
 
     const medicationName = carePlan.medication?.name ?? 'medication';
+
+    // Resolve who receives this at delivery time rather than trusting whoever
+    // was named when it was scheduled.
+    const recipients = await recipientResolver.forCarePlan({
+      id: carePlan.id,
+      userId: carePlan.userId,
+      personId: (carePlan as any).personId ?? null,
+    });
+
+    if (recipients.length === 0) {
+      await reminderEngine.failNoEligibleRecipient(freshReminder, carePlan);
+      return;
+    }
+
+    // Delivery is account-scoped and connected-account routing is out of
+    // scope, so exactly one membership per Person carries the flag today.
+    const user = recipients[0];
 
     try {
       if (freshReminder.channel === 'PUSH') {
@@ -107,6 +124,45 @@ export const reminderEngine = {
         err.message,
       );
     }
+  },
+
+  /**
+   * A due reminder that resolves to nobody must never be dropped quietly.
+   *
+   * Blocking deactivation of a sole OWNER prevents the common cause, but every
+   * other route to an empty recipient set — a revoked membership, an erased
+   * account, a plan whose subject was archived — ends here. The reminder is
+   * marked FAILED with a distinct reason and an attempt row is written, so
+   * "nobody was told" is queryable rather than invisible.
+   */
+  async failNoEligibleRecipient(reminder: any, carePlan: any): Promise<void> {
+    const reason = 'NO_ELIGIBLE_RECIPIENT';
+
+    try {
+      await prisma.notificationAttempt.create({
+        data: {
+          reminderId: reminder.id,
+          channel: reminder.channel,
+          type: 'PUSH_PRIMARY',
+          status: 'SKIPPED',
+          // Deterministic, so a retry records the fact once rather than
+          // accumulating a row per attempt.
+          idempotencyKey: `no-recipient-${reminder.id}`,
+          errorMessage: reason,
+        },
+      });
+    } catch {
+      // Unique violation — already recorded for this reminder.
+    }
+
+    await careRepository.updateReminderStatus(reminder.id, 'FAILED', undefined, reason);
+
+    log.error('Reminder had no eligible recipient and was not delivered', {
+      reminderId: reminder.id,
+      carePlanId: carePlan.id,
+      personId: carePlan.personId ?? null,
+      accountId: carePlan.userId,
+    });
   },
 
   async sendPushReminder(

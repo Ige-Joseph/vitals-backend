@@ -22,6 +22,29 @@ export const googleCalendarProvider = {
     });
   },
 
+  /**
+   * Revoke the grant at Google, not just locally.
+   *
+   * Deleting a CalendarIntegration row removes our copy of the tokens but
+   * leaves the authorisation standing on the user's Google account — a live
+   * refresh token we no longer track. Erasure and disconnect must both call
+   * this. Revoking a refresh token invalidates the whole grant, including any
+   * access tokens issued from it.
+   *
+   * Returns false rather than throwing: a grant that is already gone, or a
+   * Google outage, must not block the erasure it is part of.
+   */
+  async revokeGrant(refreshToken: string): Promise<boolean> {
+    if (!refreshToken) return false;
+
+    try {
+      await oauth2Client.revokeToken(refreshToken);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
   async exchangeCodeForTokens(code: string) {
     const { tokens } = await oauth2Client.getToken(code);
 

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { userRepository, UpdateProfileInput } from './user.repository';
+import { personService } from '@/modules/person/person.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('user-service');
@@ -59,6 +60,12 @@ export const userService = {
     const user = await userRepository.findById(targetUserId);
     if (!user) throw AppError.notFound('User not found');
     if (!user.isActive) throw AppError.conflict('User is already deactivated');
+
+    // Archive is the only removal path, and it must not strand anyone. An
+    // account that is the sole manager of an unclaimed health record has to
+    // hand it over, or have it claimed or archived, first — otherwise that
+    // person's reminders simply stop with nobody notified.
+    await personService.assertCanArchiveAccount(targetUserId);
 
     await userRepository.setActiveStatus(targetUserId, false);
     log.info('User deactivated', { adminId, targetUserId });
