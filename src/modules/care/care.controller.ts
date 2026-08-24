@@ -11,12 +11,16 @@ const updateStatusSchema = z.object({
 export const careController = {
   async listEvents(req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
-      const { status, type, from, to } = req.query as Record<string, string>;
+      const { status, type, from, to, personId } = req.query as Record<string, string>;
       const events = await careService.listEvents(req.user!.sub, {
         status: status as any,
         type,
         from,
         to,
+        // Optional. Omitted means "my own record", so existing clients are
+        // unaffected. Supplied, it is authorized before any query runs — the
+        // service never takes it on trust.
+        personId,
       });
       return ok(res, events, 'Care events retrieved');
     } catch (err) {

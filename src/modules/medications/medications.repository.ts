@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { carePlanScope, type PersonScope } from '@/modules/care/care.repository';
 import type { PrismaTx } from '@/types/prisma';
 import type { FrequencyKey } from '@/config/medication.config';
 
@@ -22,16 +23,23 @@ export const medicationRepository = {
     return prisma.medication.findUnique({ where: { carePlanId } });
   },
 
-  findWithPlan(carePlanId: string, userId: string) {
+  /**
+   * Person-scoped, per the repository convention. Authorization has already
+   * happened via assertPersonAccess; this filter is what stops a caller who
+   * knows a carePlanId from reading a plan outside that subject.
+   */
+  findWithPlan(carePlanId: string, scope: PersonScope) {
     return prisma.medication.findFirst({
-      where: { carePlanId, carePlan: { userId } },
+      where: { carePlanId, carePlan: carePlanScope(scope) },
       include: { carePlan: true },
     });
   },
 
-  listByUser(userId: string) {
+  listByPerson(scope: PersonScope) {
     return prisma.medication.findMany({
-      where: { carePlan: { userId, status: { not: 'COMPLETED' } } },
+      where: {
+        carePlan: { ...carePlanScope(scope), status: { not: 'COMPLETED' } },
+      },
       include: {
         carePlan: {
           select: { id: true, status: true, title: true },

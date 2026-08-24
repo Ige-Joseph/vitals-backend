@@ -6,6 +6,7 @@ import { careRepository } from '@/modules/care/care.repository';
 import { careService } from '@/modules/care/care.service';
 import { aiMedicationDraftsRepository } from '@/modules/ai-medication-drafts/ai-medication-drafts.repository';
 import { medicationRepository } from './medications.repository';
+import { personAccess } from '@/modules/person/person.access';
 import { generateMedicationSchedule } from './medications.scheduler';
 import { FrequencyKey } from '@/config/medication.config';
 import { createLogger } from '@/lib/logger';
@@ -35,8 +36,15 @@ const parseDateOnly = (value: string, fieldName: string): Date => {
 };
 
 export const medicationsService = {
-  async createMedication(userId: string, input: CreateMedicationInput) {
+  async createMedication(
+    userId: string,
+    input: CreateMedicationInput,
+    requestedPersonId?: string,
+  ) {
     const startDate = parseDateOnly(input.startDate, 'startDate');
+
+    // Adding a medication to someone's record is a write on their record.
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'write');
 
     let aiDraftIdToConfirm: string | undefined;
 
@@ -102,6 +110,9 @@ export const medicationsService = {
         const carePlan = await careRepository.createCarePlan(
           {
             userId,
+            // Dual-write: userId stays for the compatibility window, personId
+            // is the subject this plan is actually about.
+            personId,
             type: 'MEDICATION',
             title: `${input.name} — ${input.dosage}`,
             metadata: {
@@ -141,6 +152,8 @@ export const medicationsService = {
         await careRepository.createActivityLog(
           {
             userId,
+            personId,
+            actorUserId: userId,
             type: 'MEDICATION_CREATED',
             message: `Medication plan created: ${input.name}`,
             metadata: {
@@ -205,18 +218,21 @@ export const medicationsService = {
     return result;
   },
 
-  async listMedications(userId: string) {
-    return medicationRepository.listByUser(userId);
+  async listMedications(userId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+    return medicationRepository.listByPerson({ personId, userId });
   },
 
-  async getMedication(userId: string, carePlanId: string) {
-    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+  async getMedication(userId: string, carePlanId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+    const med = await medicationRepository.findWithPlan(carePlanId, { personId, userId });
     if (!med) throw AppError.notFound('Medication not found');
     return med;
   },
 
-  async deactivateMedication(userId: string, carePlanId: string) {
-    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+  async deactivateMedication(userId: string, carePlanId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'write');
+    const med = await medicationRepository.findWithPlan(carePlanId, { personId, userId });
 
     if (!med) {
       throw AppError.notFound('Medication not found');
@@ -281,10 +297,11 @@ export const medicationsService = {
     };
   },
 
-  async getMedicationHistory(userId: string, carePlanId: string) {
-    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+  async getMedicationHistory(userId: string, carePlanId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+    const med = await medicationRepository.findWithPlan(carePlanId, { personId, userId });
     if (!med) throw AppError.notFound('Medication not found');
 
-    return careRepository.listEventsByCarePlan(carePlanId, userId);
+    return careRepository.listEventsByCarePlan(carePlanId, { personId, userId });
   },
 };

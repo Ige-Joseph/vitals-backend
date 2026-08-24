@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { careRepository } from '@/modules/care/care.repository';
 import { careService } from '@/modules/care/care.service';
+import { personAccess } from '@/modules/person/person.access';
 import { motherBabyRepository } from './mother-baby.repository';
 import {
   getWeekFromLMP,
@@ -152,6 +153,12 @@ export const motherBabyService = {
     const profile = await motherBabyRepository.findActivePregnancy(userId);
     if (!profile) throw AppError.notFound('No active pregnancy found');
 
+    // Bridge, not a flip. Mother & Baby is scheduled after three other
+    // modules, but it shares listCareEvents, which is now person-scoped. The
+    // subject here is the caller's own record — the module accepts no
+    // personId and its behaviour is unchanged.
+    const timelinePersonId = await personAccess.resolveSelfPersonId(userId);
+
     const currentWeek = getWeekFromLMP(profile.lmpDate);
     const trimester = getTrimester(currentWeek);
 
@@ -167,7 +174,7 @@ export const motherBabyService = {
 
     const [, upcomingANC] = await Promise.all([
       weekUpdate,
-      careRepository.listCareEvents(userId, {
+      careRepository.listCareEvents({ personId: timelinePersonId, userId }, {
         status: 'PENDING',
         type: 'ANC_VISIT',
         limit: 3,

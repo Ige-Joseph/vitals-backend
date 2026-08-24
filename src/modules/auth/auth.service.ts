@@ -170,6 +170,45 @@ export const authService = {
         });
       }
 
+      // Every account gets its own Person, eagerly. Uniformity is worth more
+      // than avoiding a row: it makes the single-account case a special case
+      // of the general one, so authorization has exactly one shape.
+      //
+      // A self-Person owns itself, so it consumes neither entitlement axis —
+      // the free tier at 0/0 means "self only", not "no access".
+      const selfPerson = await tx.person.create({
+        data: {
+          displayName:
+            [data.firstName, data.lastName].filter(Boolean).join(' ') || data.email,
+          ...(data.gender ? { gender: data.gender as any } : {}),
+          ownerUserId: user.id,
+          claimedAt: new Date(),
+          createdByUserId: user.id,
+        },
+      });
+
+      await tx.personMembership.create({
+        data: {
+          personId: selfPerson.id,
+          userId: user.id,
+          role: 'OWNER',
+          status: 'ACTIVE',
+          receivesNotifications: true,
+          acceptedAt: new Date(),
+        },
+      });
+
+      await tx.personAccessEvent.create({
+        data: {
+          personId: selfPerson.id,
+          subjectUserId: user.id,
+          actorUserId: user.id,
+          action: 'CLAIMED',
+          role: 'OWNER',
+          basis: 'self-signup',
+        },
+      });
+
       await authRepository.createVerificationToken(
         {
           userId: user.id,

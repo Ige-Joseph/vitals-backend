@@ -81,6 +81,11 @@ describe('POST /api/v1/auth/signup', () => {
         emailVerificationToken: { create: jest.fn() },
         outboxEvent: { create: jest.fn() },
         refreshToken: { create: jest.fn() },
+        // Signup creates the account's own Person, its OWNER membership and
+        // the consent-ledger entry in the same transaction.
+        person: { create: jest.fn().mockResolvedValue({ id: 'person-123' }) },
+        personMembership: { create: jest.fn() },
+        personAccessEvent: { create: jest.fn() },
       }),
     );
 
@@ -122,6 +127,11 @@ describe('POST /api/v1/auth/signup', () => {
         emailVerificationToken: { create: jest.fn() },
         outboxEvent: { create: jest.fn() },
         refreshToken: { create: jest.fn() },
+        // Signup creates the account's own Person, its OWNER membership and
+        // the consent-ledger entry in the same transaction.
+        person: { create: jest.fn().mockResolvedValue({ id: 'person-123' }) },
+        personMembership: { create: jest.fn() },
+        personAccessEvent: { create: jest.fn() },
       }),
     );
 

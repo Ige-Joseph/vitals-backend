@@ -149,7 +149,11 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
     const parsed = createMedicationSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues[0].message);
 
-    const result = await medicationsService.createMedication(req.user!.sub, parsed.data as any);
+    const result = await medicationsService.createMedication(
+      req.user!.sub,
+      parsed.data as any,
+      req.query.personId as string | undefined,
+    );
     return created(res, result, 'Medication plan created');
   } catch (err) {
     next(err);
@@ -176,7 +180,10 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
  */
 router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const medications = await medicationsService.listMedications(req.user!.sub);
+    const medications = await medicationsService.listMedications(
+      req.user!.sub,
+      req.query.personId as string | undefined,
+    );
     return ok(res, medications, 'Medications retrieved');
   } catch (err) {
     next(err);
@@ -214,6 +221,7 @@ router.get(
       const history = await medicationsService.getMedicationHistory(
         req.user!.sub,
         carePlanId,
+        req.query.personId as string | undefined,
       );
 
       return ok(res, history, 'Medication history retrieved');
@@ -259,7 +267,8 @@ router.get('/:carePlanId', async (req: AuthenticatedRequest, res: Response, next
 
     const medication = await medicationsService.getMedication(
       req.user!.sub,
-      carePlanId
+      carePlanId,
+      req.query.personId as string | undefined,
     );
 
     return ok(res, medication, 'Medication retrieved');
@@ -323,6 +332,7 @@ router.delete('/:carePlanId', async (req: AuthenticatedRequest, res: Response, n
   const result = await medicationsService.deactivateMedication(
     req.user!.sub,
     carePlanId,
+    req.query.personId as string | undefined,
   );
 
   return ok(

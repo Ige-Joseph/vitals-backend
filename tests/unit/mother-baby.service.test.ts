@@ -9,7 +9,12 @@ jest.mock('@/modules/mother-baby/mother-baby.repository');
 jest.mock('@/modules/care/care.repository');
 jest.mock('@/modules/care/care.service');
 jest.mock('@/lib/prisma', () => ({
-  prisma: { $transaction: jest.fn() },
+  prisma: {
+    $transaction: jest.fn(),
+    // getTimeline resolves the caller's own Person before reading care events.
+    person: { findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }) },
+    personMembership: { findUnique: jest.fn() },
+  },
 }));
 
 const mockMotherBabyRepo = motherBabyRepository as jest.Mocked<typeof motherBabyRepository>;
@@ -165,11 +170,16 @@ describe('MotherBabyService', () => {
 
       const result = await motherBabyService.getTimeline('user-1');
 
-      expect(mockCareRepo.listCareEvents).toHaveBeenCalledWith('user-1', {
-        status: 'PENDING',
-        type: 'ANC_VISIT',
-        limit: 3,
-      });
+      // Now person-scoped. The account travels alongside only for the
+      // compatibility window, so rows without a subject yet still surface.
+      expect(mockCareRepo.listCareEvents).toHaveBeenCalledWith(
+        { personId: 'person-1', userId: 'user-1' },
+        {
+          status: 'PENDING',
+          type: 'ANC_VISIT',
+          limit: 3,
+        },
+      );
       expect(mockMotherBabyRepo.updateCurrentWeek).toHaveBeenCalled();
       expect(result.upcomingANCVisits).toEqual([]);
     });

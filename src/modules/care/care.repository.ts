@@ -3,10 +3,36 @@ import type { PrismaTx } from '@/types/prisma';
 import { Prisma } from '@prisma/client';
 
 export type CareEventStatusFilter = 'PENDING' | 'DONE' | 'SKIPPED' | 'MISSED';
+
+/**
+ * The subject a clinical query is scoped to. `personId` is required, not
+ * optional — that is the whole point. Authorization happens before this via
+ * assertPersonAccess; this type stops a scoped query being written unscoped.
+ *
+ * `userId` is the compatibility window, not a second authorization path. Rows
+ * written before their module started dual-writing have `personId = NULL`, and
+ * a strict person-only filter would make them silently disappear. Including
+ * the account lets exactly those rows through — never a row that already
+ * carries a different subject. It comes out when personId is NOT NULL.
+ */
+export interface PersonScope {
+  personId: string;
+  userId?: string;
+}
+
+/** Matches the subject's rows, plus not-yet-backfilled rows of the account. */
+export const carePlanScope = (scope: PersonScope) => ({
+  OR: [
+    { personId: scope.personId },
+    ...(scope.userId ? [{ personId: null, userId: scope.userId }] : []),
+  ],
+});
 export type CarePlanType = 'MEDICATION' | 'PREGNANCY' | 'VACCINATION';
 
 export interface CreateCarePlanInput {
   userId: string;
+  /** The subject. Dual-written alongside userId during the compatibility window. */
+  personId?: string;
   type: CarePlanType;
   title: string;
   metadata?: Prisma.InputJsonValue;
@@ -98,8 +124,17 @@ export const careRepository = {
     });
   },
 
+  /**
+   * Repository convention: a clinical query is never written without a person
+   * scope. `PersonScope` makes that structural — the caller cannot express a
+   * query for "everyone's care events" by accident, because there is no
+   * overload that omits the subject.
+   *
+   * `userId` is still accepted alongside for the compatibility window. It is
+   * not the authorization boundary any more; personId is.
+   */
   listCareEvents(
-    userId: string,
+    scope: PersonScope,
     filters: {
       status?: CareEventStatusFilter;
       type?: string;
@@ -110,7 +145,7 @@ export const careRepository = {
   ) {
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId, status: 'ACTIVE' },
+        carePlan: { ...carePlanScope(scope), status: 'ACTIVE' },
         ...(filters.status && { status: filters.status }),
         ...(filters.type && { eventType: filters.type }),
         ...(filters.from || filters.to
@@ -286,7 +321,14 @@ export const careRepository = {
   // ─── Activity Log ──────────────────────────────────────────────────────
 
   createActivityLog(
-    data: { userId: string; type: string; message: string; metadata?: Prisma.InputJsonValue; },
+    data: {
+      userId: string;
+      personId?: string;
+      actorUserId?: string;
+      type: string;
+      message: string;
+      metadata?: Prisma.InputJsonValue;
+    },
     tx?: PrismaTx,
   ) {
     const client = tx ?? prisma;
@@ -303,11 +345,11 @@ export const careRepository = {
 
 
 
-  listEventsByCarePlan(carePlanId: string, userId: string) {
+  listEventsByCarePlan(carePlanId: string, scope: PersonScope) {
   return prisma.careEvent.findMany({
     where: {
       carePlanId,
-      carePlan: { userId },
+      carePlan: carePlanScope(scope),
     },
     orderBy: { scheduledFor: 'desc' },
     include: {

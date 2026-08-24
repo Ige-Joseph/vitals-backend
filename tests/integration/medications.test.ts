@@ -18,6 +18,16 @@ jest.mock('@/lib/prisma', () => ({
       update: jest.fn(),
     },
     careEvent: { createMany: jest.fn() },
+    // The authorization layer resolves the caller's own Person and checks the
+    // membership before any clinical query runs.
+    person: { findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }) },
+    personMembership: {
+      findUnique: jest.fn().mockResolvedValue({
+        role: 'OWNER',
+        status: 'ACTIVE',
+        person: { archivedAt: null },
+      }),
+    },
     reminder: { createMany: jest.fn() },
     activityLog: { create: jest.fn() },
   },
@@ -89,9 +99,9 @@ describe('POST /api/v1/medications', () => {
     (prisma.$transaction as jest.Mock).mockImplementation(async (fn) =>
       fn({
         carePlan: { create: jest.fn().mockResolvedValue(mockCarePlan) },
-        medication: { create: jest.fn().mockResolvedValue({ id: 'med-1', ...mockCarePlan }) },
-        careEvent: { create: jest.fn().mockResolvedValue({ id: 'event-1' }) },
-        reminder: { create: jest.fn().mockResolvedValue({ id: 'reminder-1' }) },
+        medication: { create: jest.fn().mockResolvedValue({ ...mockCarePlan, id: 'med-1' }) },
+        careEvent: { createMany: jest.fn().mockResolvedValue({ count: 14 }) },
+        reminder: { createMany: jest.fn().mockResolvedValue({ count: 14 }) },
         activityLog: { create: jest.fn() },
       }),
     );
@@ -106,8 +116,9 @@ describe('POST /api/v1/medications', () => {
         name: 'Paracetamol',
         dosage: '500mg',
         frequency: 'TWICE_DAILY',
-        startDate: tomorrow.toISOString(),
+        startDate: tomorrow.toISOString().slice(0, 10), // schema wants YYYY-MM-DD
         durationDays: 7,
+        customTimes: ['08:00', '20:00'], // TWICE_DAILY requires exactly two
       });
 
     expect(res.status).toBe(201);
