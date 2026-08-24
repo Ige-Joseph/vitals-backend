@@ -20,6 +20,19 @@ export interface PersonScope {
   userId?: string;
 }
 
+/**
+ * Scope for leaf clinical logs that carry their own personId. Same
+ * compatibility window as carePlanScope: the subject's rows, plus rows not
+ * yet backfilled that belong to the account — never a row already carrying a
+ * different subject.
+ */
+export const personLogScope = (scope: PersonScope) => ({
+  OR: [
+    { personId: scope.personId },
+    ...(scope.userId ? [{ personId: null, userId: scope.userId }] : []),
+  ],
+});
+
 /** Matches the subject's rows, plus not-yet-backfilled rows of the account. */
 export const carePlanScope = (scope: PersonScope) => ({
   OR: [

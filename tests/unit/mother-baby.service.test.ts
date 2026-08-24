@@ -13,7 +13,16 @@ jest.mock('@/lib/prisma', () => ({
     $transaction: jest.fn(),
     // getTimeline resolves the caller's own Person before reading care events.
     person: { findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }) },
-    personMembership: { findUnique: jest.fn() },
+    personMembership: {
+      findUnique: jest.fn().mockResolvedValue({
+        role: 'OWNER',
+        status: 'ACTIVE',
+        person: { archivedAt: null },
+      }),
+      // hasBabyPerson — no existing baby, so the first is exempt.
+      count: jest.fn().mockResolvedValue(0),
+    },
+    user: { findUniqueOrThrow: jest.fn().mockResolvedValue({ managedPersonLimit: 0, connectionLimit: 0 }) },
   },
 }));
 
@@ -135,6 +144,13 @@ describe('MotherBabyService', () => {
             create: jest.fn().mockResolvedValue(babyPlan),
           },
           activityLog: { create: jest.fn() },
+          // recordDelivery / createStandaloneBabyProfile now create the baby
+          // as a Person, with its OWNER membership and ledger entry, in the
+          // same transaction as the vaccination plan.
+          person: { create: jest.fn().mockResolvedValue({ id: 'baby-person-1' }) },
+          personMembership: { create: jest.fn() },
+          personAccessEvent: { create: jest.fn() },
+
         }),
       );
 
@@ -193,6 +209,12 @@ describe('MotherBabyService', () => {
         fn({
           carePlan: { create: jest.fn().mockResolvedValue(babyPlan) },
           activityLog: { create: jest.fn() },
+          // recordDelivery / createStandaloneBabyProfile now create the baby
+          // as a Person, with its OWNER membership and ledger entry, in the
+          // same transaction as the vaccination plan.
+          person: { create: jest.fn().mockResolvedValue({ id: 'baby-person-1' }) },
+          personMembership: { create: jest.fn() },
+          personAccessEvent: { create: jest.fn() },
         }),
       );
 

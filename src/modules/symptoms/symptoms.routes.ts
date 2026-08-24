@@ -6,6 +6,8 @@ import { ok, created, validationError } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
 import { geminiProvider } from '@/providers/ai/gemini.provider';
 import { quotaService } from '@/modules/usage/quota.service';
+import { personAccess } from '@/modules/person/person.access';
+import { personLogScope } from '@/modules/care/care.repository';
 import { ensureEscalationPath } from '@/lib/ai-safety';
 import { createLogger } from '@/lib/logger';
 
@@ -107,6 +109,15 @@ router.post('/check', async (req: AuthenticatedRequest, res: Response, next: Nex
       return validationError(res, parsedRequest.error.issues[0].message);
     }
 
+    // Logging a symptom for someone is a write on their record. Quota stays
+    // on the account: a caregiver spends their own allowance, and a Person
+    // must never become a quota multiplier.
+    const subjectPersonId = await personAccess.resolveSubject(
+      req.user!.sub,
+      req.query.personId as string | undefined,
+      'write',
+    );
+
     await quotaService.checkAndIncrement(
       req.user!.sub,
       req.user!.planType,
@@ -159,6 +170,7 @@ Respond with a JSON object with exactly these fields:
     const symptomLog = await prisma.symptomLog.create({
       data: {
         userId: req.user!.sub,
+        personId: subjectPersonId,
         symptomsText: parsedRequest.data.symptomsText,
         severity: aiResponse.severity,
         aiResponse: { ...aiResponse, _fallback: usedFallback } as any,
@@ -208,9 +220,18 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response, next: Ne
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(50, parseInt(req.query.limit as string) || 10);
 
+    const scope = personLogScope({
+      personId: await personAccess.resolveSubject(
+        req.user!.sub,
+        req.query.personId as string | undefined,
+        'read',
+      ),
+      userId: req.user!.sub,
+    });
+
     const [entries, total] = await Promise.all([
       prisma.symptomLog.findMany({
-        where: { userId: req.user!.sub },
+        where: scope,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -222,7 +243,7 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response, next: Ne
           createdAt: true,
         },
       }),
-      prisma.symptomLog.count({ where: { userId: req.user!.sub } }),
+      prisma.symptomLog.count({ where: scope }),
     ]);
 
     return ok(

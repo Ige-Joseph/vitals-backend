@@ -1,6 +1,8 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
+import { personAccess } from '@/modules/person/person.access';
+import { personLogScope } from '@/modules/care/care.repository';
 import { authenticate } from '@/middleware/auth.middleware';
 import { ok, created, validationError } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
@@ -79,12 +81,20 @@ router.post('/log', async (req: AuthenticatedRequest, res: Response, next: NextF
     if (!parsed.success) return validationError(res, parsed.error.issues[0].message);
 
     const { mood, craving } = parsed.data;
+
+    // Mood is clinical: it belongs to the Person it is about.
+    const subjectPersonId = await personAccess.resolveSubject(
+      req.user!.sub,
+      req.query.personId as string | undefined,
+      'write',
+    );
     const insight = generateInsight(mood as MoodOption, craving as CravingOption);
 
     const entry = await prisma.$transaction(async (tx: any) => {
       const log_entry = await tx.moodLog.create({
         data: {
           userId: req.user!.sub,
+          personId: subjectPersonId,
           mood: mood ?? null,
           craving: craving ?? null,
           insight,
@@ -95,6 +105,8 @@ router.post('/log', async (req: AuthenticatedRequest, res: Response, next: NextF
       await tx.activityLog.create({
         data: {
           userId: req.user!.sub,
+          personId: subjectPersonId,
+          actorUserId: req.user!.sub,
           type: 'MOOD_LOGGED',
           message: 'Mood and craving entry recorded',
           metadata: { mood, craving, moodLogId: log_entry.id },
@@ -139,14 +151,23 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response, next: Ne
     const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
     const skip = (page - 1) * limit;
 
+    const scope = personLogScope({
+      personId: await personAccess.resolveSubject(
+        req.user!.sub,
+        req.query.personId as string | undefined,
+        'read',
+      ),
+      userId: req.user!.sub,
+    });
+
     const [entries, total] = await Promise.all([
       prisma.moodLog.findMany({
-        where: { userId: req.user!.sub },
+        where: scope,
         orderBy: { loggedAt: 'desc' },
         skip,
         take: limit,
       }),
-      prisma.moodLog.count({ where: { userId: req.user!.sub } }),
+      prisma.moodLog.count({ where: scope }),
     ]);
 
     return ok(

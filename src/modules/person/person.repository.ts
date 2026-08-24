@@ -6,7 +6,17 @@ export interface CapacityUsage {
   managedUsed: number;
   connectionLimit: number;
   connectionsUsed: number;
+  /** Whether a first-baby exemption is currently being applied. */
+  firstBabyExempt: boolean;
 }
+
+/**
+ * Origins that represent a baby added through the mother-baby journey. The
+ * earliest of these that an account owns does not consume a managed slot,
+ * because the journey is core free functionality and the free tier is
+ * managedPersonLimit = 0.
+ */
+const BABY_ORIGINS = ['DELIVERY', 'BABY_PROFILE'] as const;
 
 export const personRepository = {
   /**
@@ -46,12 +56,48 @@ export const personRepository = {
       }),
     ]);
 
+    // Exempt exactly one baby — the earliest. Derived from provenance and
+    // ordering rather than a stored flag, so it cannot drift. A second baby
+    // (twins, another child) consumes capacity like any other dependent.
+    const babyCount = await prisma.personMembership.count({
+      where: {
+        userId,
+        role: 'OWNER',
+        status: 'ACTIVE',
+        person: {
+          ownerUserId: null,
+          archivedAt: null,
+          origin: { in: [...BABY_ORIGINS] },
+        },
+      },
+    });
+
+    const firstBabyExempt = babyCount > 0;
+
     return {
       managedLimit: user.managedPersonLimit,
-      managedUsed,
+      managedUsed: firstBabyExempt ? managedUsed - 1 : managedUsed,
       connectionLimit: user.connectionLimit,
       connectionsUsed,
+      firstBabyExempt,
     };
+  },
+
+  /** Whether this account already owns a baby Person that is still unclaimed. */
+  async hasBabyPerson(userId: string): Promise<boolean> {
+    const count = await prisma.personMembership.count({
+      where: {
+        userId,
+        role: 'OWNER',
+        status: 'ACTIVE',
+        person: {
+          ownerUserId: null,
+          archivedAt: null,
+          origin: { in: [...BABY_ORIGINS] },
+        },
+      },
+    });
+    return count > 0;
   },
 
   /**

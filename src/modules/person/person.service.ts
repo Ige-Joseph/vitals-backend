@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { createLogger } from '@/lib/logger';
 import { personRepository } from './person.repository';
+import type { PrismaTx } from '@/types/prisma';
 
 const log = createLogger('person-service');
 
@@ -25,6 +26,90 @@ export const personService = {
         `record(s) (${names}). Transfer them to another account, let the ` +
         `person claim their own record, or archive them before continuing.`,
     );
+  },
+
+  /**
+   * Entitlement, enforced at creation and only at creation.
+   *
+   * An account that falls below its limit after a downgrade keeps every Person
+   * it already has — health data must never become read-only on a billing
+   * event. This is a ceiling on *new*, nothing more.
+   */
+  async assertCanAddManagedPerson(userId: string): Promise<void> {
+    const capacity = await personRepository.capacityFor(userId);
+
+    if (capacity.managedUsed >= capacity.managedLimit) {
+      throw AppError.badRequest(
+        'You have reached the number of people this account can manage. ' +
+          'Upgrade to add another.',
+      );
+    }
+  },
+
+  /**
+   * Create a baby as a Person, with the account that recorded the birth as its
+   * OWNER.
+   *
+   * A baby is a Person even with no Vitals account of its own — that is the
+   * case the whole separation exists for. Post-birth records describing the
+   * baby's health, vaccination plans included, belong to this Person; the
+   * mother's pregnancy records stay on hers.
+   *
+   * The first baby is free. The mother-baby journey is core functionality and
+   * the free tier is managedPersonLimit = 0, so gating it on entitlement would
+   * gate the product. Later babies consume capacity like any other dependent.
+   */
+  async createBabyPerson(
+    input: {
+      userId: string;
+      displayName: string;
+      dateOfBirth?: Date | null;
+      gender?: string | null;
+      origin: 'DELIVERY' | 'BABY_PROFILE';
+    },
+    tx: PrismaTx,
+  ) {
+    const person = await tx.person.create({
+      data: {
+        displayName: input.displayName,
+        dateOfBirth: input.dateOfBirth ?? null,
+        ...(input.gender ? { gender: input.gender as any } : {}),
+        // No ownerUserId: the baby has not claimed its own record, and may
+        // never do so. That is what makes it a *managed* Person.
+        createdByUserId: input.userId,
+        origin: input.origin,
+      },
+    });
+
+    await tx.personMembership.create({
+      data: {
+        personId: person.id,
+        userId: input.userId,
+        role: 'OWNER',
+        status: 'ACTIVE',
+        receivesNotifications: true,
+        acceptedAt: new Date(),
+      },
+    });
+
+    await tx.personAccessEvent.create({
+      data: {
+        personId: person.id,
+        subjectUserId: input.userId,
+        actorUserId: input.userId,
+        action: 'GRANTED',
+        role: 'OWNER',
+        basis: input.origin === 'DELIVERY' ? 'delivery' : 'baby-profile',
+      },
+    });
+
+    log.info('Baby Person created', {
+      personId: person.id,
+      userId: input.userId,
+      origin: input.origin,
+    });
+
+    return person;
   },
 
   /**

@@ -159,6 +159,24 @@ enum AccessAction {
   ERASED
 }
 
+/// How a Person came to exist. Provenance, like createdByUserId — set once at
+/// creation and never changed. Entitlement stays *derived*: the first-baby
+/// exemption is computed from this plus ordering, so there is no stored
+/// "this one is free" flag that could drift from reality.
+enum PersonOrigin {
+  /// The account's own record, created at signup.
+  SELF
+
+  /// A baby born through the pregnancy journey.
+  DELIVERY
+
+  /// A baby added after birth, without a pregnancy recorded in Vitals.
+  BABY_PROFILE
+
+  /// Any other dependent.
+  MANAGED
+}
+
 /// Where an account erasure request has got to. Erasure is a state machine,
 /// not an instant operation, because an account that is the sole OWNER of an
 /// unclaimed Person cannot be erased without first resolving that Person.
@@ -359,6 +377,9 @@ model Person {
   /// health records of anyone else.
   createdByUserId String?
 
+  /// How this Person came to exist. Immutable.
+  origin PersonOrigin @default(MANAGED)
+
   archivedAt DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -385,6 +406,7 @@ model Person {
   /// it would read as drift on the next migrate.
   @@unique([ownerUserId])
   @@index([createdByUserId])
+  @@index([origin, createdAt])
   @@map("persons")
 }
 
