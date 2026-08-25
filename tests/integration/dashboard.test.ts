@@ -17,6 +17,10 @@ jest.mock('@/lib/prisma', () => ({
     dailyUsage: { findUnique: jest.fn().mockResolvedValue(null) },
     // getUsageSummary delegates to the quota service, which reads the tier.
     user: { findUnique: jest.fn().mockResolvedValue({ planType: 'FREE' }) },
+    // Entitlement resolves from subscription state; no subscription means the
+    // tier falls back to the projection on User.
+    subscription: { findFirst: jest.fn().mockResolvedValue(null) },
+
     person: {
       findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }),
       findUniqueOrThrow: jest.fn().mockResolvedValue({

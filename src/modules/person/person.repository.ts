@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { entitlementService } from '@/modules/billing/entitlement.service';
 import type { PrismaTx } from '@/types/prisma';
 
 export interface CapacityUsage {
@@ -29,10 +30,9 @@ export const personRepository = {
    * nothing that can drift.
    */
   async capacityFor(userId: string): Promise<CapacityUsage> {
-    const user = await prisma.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: { managedPersonLimit: true, connectionLimit: true },
-    });
+    // Resolved from what the account is paying for. The columns on User are
+    // a manual grant that tops this up, never the source of truth.
+    const entitlement = await entitlementService.resolve(userId);
 
     const [managedUsed, connectionsUsed] = await Promise.all([
       prisma.personMembership.count({
@@ -75,9 +75,9 @@ export const personRepository = {
     const firstBabyExempt = babyCount > 0;
 
     return {
-      managedLimit: user.managedPersonLimit,
+      managedLimit: entitlement.managedPersonLimit,
       managedUsed: firstBabyExempt ? managedUsed - 1 : managedUsed,
-      connectionLimit: user.connectionLimit,
+      connectionLimit: entitlement.connectionLimit,
       connectionsUsed,
       firstBabyExempt,
     };

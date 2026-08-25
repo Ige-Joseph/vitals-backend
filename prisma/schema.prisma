@@ -185,6 +185,48 @@ enum PersonOrigin {
   MANAGED
 }
 
+// ─────────────────────────────────────────────
+// Billing
+// ─────────────────────────────────────────────
+
+enum PaymentProvider {
+  /// No provider is integrated yet. Rows carrying this were created by an
+  /// admin grant or a test, never by money changing hands.
+  NONE
+  PAYSTACK
+  FLUTTERWAVE
+}
+
+enum SubscriptionStatus {
+  /// Checkout started, first payment not confirmed. Grants nothing.
+  INCOMPLETE
+
+  ACTIVE
+
+  /// Renewal failed. Still grants entitlement through the grace window —
+  /// losing access to a dependent's records because a card expired is the
+  /// wrong failure, and the account keeps them regardless.
+  PAST_DUE
+
+  /// Cancelled but paid up. Still grants until currentPeriodEnd.
+  CANCELED
+
+  /// Period elapsed. Grants nothing.
+  EXPIRED
+}
+
+enum PaymentTransactionType {
+  CHARGE
+  REFUND
+  CHARGEBACK
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
 /// Where an account erasure request has got to. Erasure is a state machine,
 /// not an instant operation, because an account that is the sole OWNER of an
 /// unclaimed Person cannot be erased without first resolving that Person.
@@ -255,6 +297,9 @@ model User {
 
   calendarIntegrations CalendarIntegration[]
   calendarEventLinks   CalendarEventLink[]
+
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
 
   // Person separation — phase A. No data is written to these yet.
   ownedPersons      Person[]
@@ -507,6 +552,141 @@ model PersonAccessEvent {
   @@index([personId, occurredAt])
   @@index([subjectUserId, occurredAt])
   @@map("person_access_events")
+}
+
+// ─────────────────────────────────────────────
+// Billing — subscriptions, prices and money movements
+// ─────────────────────────────────────────────
+
+/// A price someone can buy a tier at.
+///
+/// A row here is immutable once anyone may have bought it. Repricing means
+/// inserting a new row and setting `active = false` on the old one — never
+/// editing `amountMinor`. That is what lets an existing subscriber keep the
+/// price they signed up at: their subscription points at this row, and the row
+/// never changes underneath them.
+///
+/// Seeded from billing.config.ts, which stays the definition of what is
+/// *offered*. This table is what a subscription can still resolve years later,
+/// after the config has moved on.
+model Price {
+  /// Stable, human-readable, and identical to the config entry's id.
+  id String @id
+
+  tier          PlanType
+  label         String
+  amountMinor   Int
+  currency      String   @default("NGN")
+  interval      String
+  intervalCount Int      @default(1)
+
+  /// Offered for purchase. Retired prices stay resolvable for their holders.
+  active Boolean @default(true)
+
+  /// Not yet validated against real users.
+  provisional Boolean @default(true)
+
+  /// The provider's identifier for this price, once one exists. Null until a
+  /// provider is wired, and different per provider.
+  providerPriceId String?
+  provider        PaymentProvider @default(NONE)
+
+  createdAt DateTime @default(now())
+
+  subscriptions Subscription[]
+
+  @@index([tier, active])
+  @@map("prices")
+}
+
+/// What an account is paying for.
+///
+/// Account-scoped, never person-scoped: entitlement is measured per login, and
+/// a Person must never become something you can buy more of by adding people.
+model Subscription {
+  id      String @id @default(uuid())
+  userId  String
+  priceId String
+
+  status   SubscriptionStatus @default(INCOMPLETE)
+  provider PaymentProvider    @default(NONE)
+
+  /// The provider's own identifier. Unique so a webhook can find exactly one
+  /// row, and nullable because a subscription exists locally from the moment
+  /// checkout starts — before the provider has named it.
+  providerSubscriptionId String? @unique
+  /// The provider's customer handle. Kept separately so a refund arriving
+  /// after erasure can still be attributed without a user row.
+  providerCustomerRef String?
+
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  /// Cancelled by the subscriber but still paid up until periodEnd.
+  cancelAtPeriodEnd Boolean   @default(false)
+  canceledAt        DateTime?
+  endedAt           DateTime?
+
+  /// Set when cancellation was requested but the provider has not confirmed —
+  /// an account erasing itself must not be blocked by a provider outage, so
+  /// the request is recorded and reconciliation retries it later.
+  cancellationRequestedAt DateTime?
+  cancellationConfirmedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Restrict, like every other account-owned record: a subscription is a
+  /// financial fact and must outlive an attempt to delete the account.
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  price Price @relation(fields: [priceId], references: [id], onDelete: Restrict)
+
+  transactions PaymentTransaction[]
+
+  @@index([userId, status])
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+/// Money that moved, or tried to.
+///
+/// Both `userId` and `subscriptionId` are nullable, and that is the point: a
+/// refund or chargeback can arrive after the account has been erased, and it
+/// still has to land somewhere. Erasure nulls the user link and keeps the row,
+/// because a financial record has its own basis for retention that is not the
+/// subject's account. `providerReference` and `providerCustomerRef` carry no
+/// personal data and are what reconciliation matches on.
+model PaymentTransaction {
+  id String @id @default(uuid())
+
+  userId         String?
+  subscriptionId String?
+
+  provider PaymentProvider
+  /// The provider's id for this movement. Unique, so replaying a webhook
+  /// cannot record the same payment twice.
+  providerReference   String  @unique
+  providerCustomerRef String?
+
+  type   PaymentTransactionType
+  status PaymentTransactionStatus @default(PENDING)
+
+  amountMinor Int
+  currency    String @default("NGN")
+
+  /// What the provider sent, kept verbatim for disputes and reconciliation.
+  payload Json @default("{}")
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, occurredAt])
+  @@index([subscriptionId, occurredAt])
+  @@index([providerCustomerRef])
+  @@map("payment_transactions")
 }
 
 // ─────────────────────────────────────────────

@@ -7,6 +7,10 @@ jest.mock('@/lib/prisma', () => ({
     // The tier is read from the database now, not from the access token, so a
     // token minted before an upgrade cannot serve stale limits.
     user: { findUnique: jest.fn() },
+    // Entitlement resolves from subscription state; no subscription means the
+    // tier falls back to the projection on User.
+    subscription: { findFirst: jest.fn().mockResolvedValue(null) },
+
     dailyUsage: {
       upsert: jest.fn(),
       updateMany: jest.fn(),

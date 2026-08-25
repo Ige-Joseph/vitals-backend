@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { env } from '@/config/env';
 import { createLogger } from '@/lib/logger';
+import { entitlementService } from './entitlement.service';
 import {
   TIER_ENTITLEMENTS,
   TIER_DESCRIPTIONS,
@@ -41,6 +42,44 @@ export const billingService = {
   },
 
   /**
+   * Put the configured prices in the table, so a subscription can point at a
+   * row that outlives the config.
+   *
+   * Insert-only. An existing row is never updated, because a price anyone may
+   * have bought must not change underneath them — repricing means adding a new
+   * config entry with a new id, which appears here as a new row.
+   */
+  async syncPrices(): Promise<{ inserted: number }> {
+    const configured = Object.values(TIER_DESCRIPTIONS).flatMap((tier) =>
+      tier.prices.map((price) => ({ ...price, tier: tier.tier })),
+    );
+
+    let inserted = 0;
+    for (const price of configured) {
+      const created = await prisma.price.createMany({
+        data: [
+          {
+            id: price.id,
+            tier: price.tier,
+            label: price.label,
+            amountMinor: price.amountMinor,
+            currency: price.currency,
+            interval: price.interval,
+            intervalCount: price.intervalCount,
+            active: price.active,
+            provisional: price.provisional,
+          },
+        ],
+        skipDuplicates: true,
+      });
+      inserted += created.count;
+    }
+
+    if (inserted > 0) log.info('Prices synced from config', { inserted });
+    return { inserted };
+  },
+
+  /**
    * A tier with its sellable periods decorated — per-month cost and the saving
    * against the dearest option, computed rather than left to the client so
    * every surface shows the same number.
@@ -51,25 +90,20 @@ export const billingService = {
 
   /** The caller's tier, what it grants, and what the other tier would. */
   async getPlan(userId: string) {
-    const user = await prisma.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: {
-        planType: true,
-        managedPersonLimit: true,
-        connectionLimit: true,
-      },
-    });
-
-    const tier = user.planType as BillingTier;
+    // Entitlement comes from what is being paid for; planType is a projection.
+    const entitlement = await entitlementService.resolve(userId);
+    const tier = entitlement.tier;
 
     return {
       tier,
+      subscription: entitlement.subscription,
+      entitlementSource: entitlement.source,
       description: billingService.describeTier(TIER_DESCRIPTIONS[tier]),
       // The account's actual columns, which may differ from the tier default
       // if someone was granted an override.
       entitlements: {
-        managedPersonLimit: user.managedPersonLimit,
-        connectionLimit: user.connectionLimit,
+        managedPersonLimit: entitlement.managedPersonLimit,
+        connectionLimit: entitlement.connectionLimit,
       },
       tiers: Object.values(TIER_DESCRIPTIONS).map(billingService.describeTier),
       checkoutUrl: billingService.checkoutUrl(),

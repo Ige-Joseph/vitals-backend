@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger';
 import { googleCalendarProvider } from '@/providers/calendar/google-calendar.provider';
 import { personRepository } from './person.repository';
 import { personService } from './person.service';
+import { subscriptionService } from '@/modules/billing/subscription.service';
 
 const log = createLogger('erasure-service');
 
@@ -43,6 +44,12 @@ export const erasureService = {
     // Re-check rather than trusting the stored status: a Person may have been
     // handed to this account since the request was made.
     await personService.assertCanArchiveAccount(userId);
+
+    // Stop being charged. Best-effort at the provider and never fatal: the
+    // right to erasure does not depend on a payment provider being reachable.
+    // An unconfirmed cancellation is recorded on the subscription for
+    // reconciliation to retry.
+    const billing = await subscriptionService.cancelAllForAccount(userId, 'account-erasure');
 
     // Revoke remote grants before dropping the rows that hold the tokens —
     // afterwards we no longer know what to revoke.
@@ -134,11 +141,15 @@ export const erasureService = {
         });
       }
 
-      // 3. Memberships this account held over *other* Persons. Removing access
+      // 3. Billing records survive with their personal link removed. A refund
+      //    can arrive weeks from now and still has to land somewhere.
+      await subscriptionService.detachFromErasedAccount(userId, tx);
+
+      // 4. Memberships this account held over *other* Persons. Removing access
       //    never removes their data.
       await tx.personMembership.deleteMany({ where: { userId } });
 
-      // 4. Strip identity from rows that survive because they belong to
+      // 5. Strip identity from rows that survive because they belong to
       //    someone else. Both columns are attribution and are never read for
       //    authorization, which is what makes this safe.
       await tx.person.updateMany({
@@ -158,7 +169,7 @@ export const erasureService = {
         data: { subjectUserId: null },
       });
 
-      // 5. Tombstone. The row survives carrying no personal data, so Restrict
+      // 6. Tombstone. The row survives carrying no personal data, so Restrict
       //    is never defeated and the original address is freed for re-signup.
       await tx.user.update({
         where: { id: userId },
@@ -182,6 +193,8 @@ export const erasureService = {
     log.info('Account erased', {
       userId,
       actorUserId,
+      subscriptionsCancelled: billing.cancelled,
+      cancellationsUnconfirmed: billing.unconfirmed,
       grantsRevoked: revoked,
       integrations: integrations.length,
       clinicalRowsDestroyed: result.clinicalDestroyed,
@@ -189,6 +202,8 @@ export const erasureService = {
 
     return {
       userId,
+      subscriptionsCancelled: billing.cancelled,
+      cancellationsUnconfirmed: billing.unconfirmed,
       grantsRevoked: revoked,
       clinicalRowsDestroyed: result.clinicalDestroyed,
     };

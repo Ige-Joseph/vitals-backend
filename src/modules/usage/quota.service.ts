@@ -2,26 +2,22 @@ import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { env } from '@/config/env';
 import { createLogger } from '@/lib/logger';
+import { entitlementService } from '@/modules/billing/entitlement.service';
 
 const log = createLogger('quota-service');
 
 type QuotaFeature = 'symptomCheck' | 'drugDetection';
 
 /**
- * The tier is read from the database, never from the access token.
+ * The tier is resolved from what the account is paying for, never from the
+ * access token.
  *
  * The token carries planType and lives for 15 minutes, so a token minted
  * before an upgrade says FREE afterwards. Serving entitlement from it is the
  * "I paid and nothing happened" bug: the user is charged and then told they
  * have run out of checks. One indexed lookup is the right price for that.
  */
-const readTier = async (userId: string): Promise<string> => {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { planType: true },
-  });
-  return user?.planType ?? 'FREE';
-};
+const readTier = (userId: string): Promise<string> => entitlementService.tierFor(userId);
 
 const getLimit = (planType: string, feature: QuotaFeature): number => {
   const isPremium = planType === 'PREMIUM';

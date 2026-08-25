@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { userRepository, UpdateProfileInput } from './user.repository';
 import { personService } from '@/modules/person/person.service';
+import { subscriptionService } from '@/modules/billing/subscription.service';
 import { personHealthService } from '@/modules/person/person.health.service';
 import { personAccess } from '@/modules/person/person.access';
 import { createLogger } from '@/lib/logger';
@@ -163,8 +164,21 @@ export const userService = {
     // person's reminders simply stop with nobody notified.
     await personService.assertCanArchiveAccount(targetUserId);
 
+    // An archived account must not keep being charged. Local state is closed
+    // regardless; an unconfirmed provider cancellation is recorded rather than
+    // blocking the archive.
+    const billing = await subscriptionService.cancelAllForAccount(
+      targetUserId,
+      'account-deactivation',
+    );
+
     await userRepository.setActiveStatus(targetUserId, false);
-    log.info('User deactivated', { adminId, targetUserId });
+    log.info('User deactivated', {
+      adminId,
+      targetUserId,
+      subscriptionsCancelled: billing.cancelled,
+      cancellationsUnconfirmed: billing.unconfirmed,
+    });
   },
 
   async reactivateUser(adminId: string, targetUserId: string) {
