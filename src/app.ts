@@ -26,6 +26,7 @@ import motherBabyRoutes from '@/modules/mother-baby/mother-baby.routes';
 import articleRoutes from '@/modules/articles/articles.routes';
 import aiMedicationDraftsRoutes from '@/modules/ai-medication-drafts/ai-medication-drafts.routes';
 import calendarRoutes from '@/modules/calendar/calendar.routes';
+import personRoutes from '@/modules/person/person.routes';
 
 
 
@@ -130,7 +131,8 @@ export const createApp = () => {
   app.use(`${prefix}/mother-baby`, motherBabyRoutes);
   app.use(`${prefix}/articles`, articleRoutes);
   app.use(`${prefix}/ai/medication-drafts`, aiMedicationDraftsRoutes);
-  app.use(`${prefix}/calendar`, calendarRoutes);  
+  app.use(`${prefix}/calendar`, calendarRoutes);
+  app.use(`${prefix}/persons`, personRoutes);  
   // ─────────────────────────────────────────────
   // Error handling — must be last
   // ─────────────────────────────────────────────

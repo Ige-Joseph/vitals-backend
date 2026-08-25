@@ -185,7 +185,7 @@ export const careRepository = {
     return client.careEvent.update({ where: { id }, data: { status } });
   },
 
-  getTodayCareEvents(userId: string) {
+  getTodayCareEvents(scope: PersonScope) {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     const end = new Date();
@@ -193,7 +193,7 @@ export const careRepository = {
 
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId, status: 'ACTIVE' },
+        carePlan: { ...carePlanScope(scope), status: 'ACTIVE' },
         scheduledFor: { gte: start, lte: end },
       },
       orderBy: { scheduledFor: 'asc' },
@@ -201,10 +201,10 @@ export const careRepository = {
     });
   },
 
-  getUpcomingCareEvents(userId: string, limit = 5) {
+  getUpcomingCareEvents(scope: PersonScope, limit = 5) {
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId, status: 'ACTIVE' },
+        carePlan: { ...carePlanScope(scope), status: 'ACTIVE' },
         scheduledFor: { gt: new Date() },
         status: 'PENDING',
       },
@@ -348,9 +348,9 @@ export const careRepository = {
     return client.activityLog.create({ data });
   },
 
-  getRecentActivity(userId: string, limit = 10) {
+  getRecentActivity(scope: PersonScope, limit = 10) {
     return prisma.activityLog.findMany({
-      where: { userId },
+      where: personLogScope(scope),
       orderBy: { createdAt: 'desc' },
       take: limit,
     });

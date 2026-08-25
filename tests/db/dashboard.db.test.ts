@@ -34,17 +34,19 @@ describe('dashboard — fan-out scoping', () => {
       .set(...authHeader(user));
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveProperty('todayTasks');
-    expect(res.body.data).toHaveProperty('upcomingReminders');
-    expect(res.body.data).toHaveProperty('recentActivity');
-    expect(res.body.data).toHaveProperty('usageSummary');
-    expect(res.body.data).toHaveProperty('latestMoodInsight');
+    // Clinical and account halves are deliberately separate: they answer
+    // different questions, and only the clinical half follows the person.
+    expect(res.body.data.care).toHaveProperty('todayTasks');
+    expect(res.body.data.care).toHaveProperty('upcomingReminders');
+    expect(res.body.data.care).toHaveProperty('recentActivity');
+    expect(res.body.data.care).toHaveProperty('latestMoodInsight');
+    expect(res.body.data.account).toHaveProperty('usageSummary');
 
     // The care event really exists and really reaches the response, through
     // whichever bucket the scheduler placed it in.
     const surfaced = JSON.stringify([
-      res.body.data.todayTasks,
-      res.body.data.upcomingReminders,
+      res.body.data.care.todayTasks,
+      res.body.data.care.upcomingReminders,
     ]);
     expect(surfaced).toContain('Paracetamol');
   });
@@ -81,9 +83,8 @@ describe('dashboard — fan-out scoping', () => {
     expect(body).not.toContain('Metformin');
     expect(body).not.toContain(bob.id);
 
-    // Bob's pregnancy must not be counted in Alice's summary.
-    const summary = JSON.stringify(res.body.data.motherBabySummary ?? {});
-    expect(summary).not.toContain('"totalPregnancies":1');
+    // Bob's pregnancy must not be counted in Alice's journey.
+    expect(res.body.data.care.journey.pregnancies.total).toBe(0);
   });
 
   it('reports usage from the caller’s own quota row', async () => {
@@ -104,7 +105,7 @@ describe('dashboard — fan-out scoping', () => {
     expect(res.status).toBe(200);
     // Alice has no usage row at all; Bob's must not be picked up. The compound
     // unique (userId, date) is the only thing separating them.
-    expect(res.body.data.usageSummary.symptomChecksUsed).toBe(0);
-    expect(res.body.data.usageSummary.drugDetectionsUsed).toBe(0);
+    expect(res.body.data.account.usageSummary.symptomChecksUsed).toBe(0);
+    expect(res.body.data.account.usageSummary.drugDetectionsUsed).toBe(0);
   });
 });
