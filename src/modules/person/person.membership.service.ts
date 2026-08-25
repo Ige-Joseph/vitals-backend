@@ -72,6 +72,46 @@ export const personMembershipService = {
   },
 
   /**
+   * Demographics — name, date of birth, gender.
+   *
+   * These describe a body, so they live on the Person alongside the clinical
+   * attributes rather than on the account's Profile. Profile keeps its copies
+   * during the compatibility window, unread.
+   *
+   * Requires `write`: a caregiver correcting a dependent's date of birth is
+   * ordinary care, but a VIEWER must not.
+   */
+  async updateDemographics(
+    userId: string,
+    personId: string,
+    input: { displayName?: string; dateOfBirth?: string | null; gender?: string | null },
+  ) {
+    await personAccess.assertPersonAccess(userId, personId, 'write');
+
+    const data: Record<string, unknown> = {};
+    if (input.displayName !== undefined) data.displayName = input.displayName;
+    if (input.gender !== undefined) data.gender = input.gender;
+    if (input.dateOfBirth !== undefined) {
+      data.dateOfBirth = input.dateOfBirth ? new Date(input.dateOfBirth) : null;
+    }
+
+    const person = await prisma.person.update({
+      where: { id: personId },
+      data,
+      select: {
+        id: true,
+        displayName: true,
+        dateOfBirth: true,
+        gender: true,
+        origin: true,
+      },
+    });
+
+    log.info('Person demographics updated', { personId, actorUserId: userId });
+    return person;
+  },
+
+  /**
    * Create a dependent — someone whose health this account will manage and who
    * has no Vitals account of their own.
    *

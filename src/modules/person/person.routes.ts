@@ -37,6 +37,19 @@ const healthSchema = z.object({
   alcoholUse: z.string().max(50).nullable().optional(),
 });
 
+const demographicsSchema = z.object({
+  displayName: z.string().min(1).max(120).optional(),
+  dateOfBirth: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
+    .nullable()
+    .optional(),
+  gender: z
+    .enum(['MALE', 'FEMALE', 'NON_BINARY', 'PREFER_NOT_TO_SAY'])
+    .nullable()
+    .optional(),
+});
+
 const transferSchema = z.object({
   toUserId: z.string().min(1),
 });
@@ -80,6 +93,23 @@ router.get('/:personId', async (req: AuthenticatedRequest, res: Response, next: 
   try {
     const person = await personMembershipService.get(req.user!.sub, String(req.params.personId));
     return ok(res, person, 'Person retrieved');
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Demographics: name, date of birth, gender. Attributes of a body. */
+router.patch('/:personId', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const parsed = demographicsSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues[0].message);
+
+    const person = await personMembershipService.updateDemographics(
+      req.user!.sub,
+      String(req.params.personId),
+      parsed.data,
+    );
+    return ok(res, person, 'Person updated');
   } catch (err) {
     next(err);
   }

@@ -3,6 +3,7 @@ import { AppError } from '@/lib/errors';
 import { userRepository, UpdateProfileInput } from './user.repository';
 import { personService } from '@/modules/person/person.service';
 import { personHealthService } from '@/modules/person/person.health.service';
+import { personAccess } from '@/modules/person/person.access';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('user-service');
@@ -23,6 +24,13 @@ export const userService = {
 
     const health = await personHealthService.get(userId);
 
+    // Demographics live on the Person too. Profile's copies are retained and
+    // unread for the compatibility window.
+    const person = await prisma.person.findFirst({
+      where: { ownerUserId: userId, archivedAt: null },
+      select: { id: true, displayName: true, dateOfBirth: true, gender: true },
+    });
+
     return {
       id: user.id,
       email: user.email,
@@ -31,7 +39,9 @@ export const userService = {
       profile: user.profile
         ? {
             ...user.profile,
-            // Deprecated mirror, sourced from the Person.
+            // Deprecated mirrors, sourced from the Person.
+            gender: person?.gender ?? null,
+            dateOfBirth: person?.dateOfBirth ?? null,
             bloodGroup: health.bloodGroup,
             genotype: health.genotype,
             heightCm: health.heightCm,
@@ -45,6 +55,14 @@ export const userService = {
           }
         : user.profile,
       health,
+      person: person
+        ? {
+            personId: person.id,
+            displayName: person.displayName,
+            dateOfBirth: person.dateOfBirth,
+            gender: person.gender,
+          }
+        : null,
     };
   },
 
@@ -55,6 +73,8 @@ export const userService = {
     const {
       firstName,
       lastName,
+      gender,
+      dateOfBirth,
       bloodGroup,
       genotype,
       heightCm,
@@ -86,6 +106,20 @@ export const userService = {
 
     if (Object.values(clinical).some((v) => v !== undefined)) {
       await personHealthService.update(userId, clinical);
+    }
+
+    // Demographics sent to this endpoint land on the caller's own Person.
+    if (gender !== undefined || dateOfBirth !== undefined) {
+      const selfPersonId = await personAccess.resolveSelfPersonId(userId);
+      await prisma.person.update({
+        where: { id: selfPersonId },
+        data: {
+          ...(gender !== undefined ? { gender } : {}),
+          ...(dateOfBirth !== undefined
+            ? { dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null }
+            : {}),
+        },
+      });
     }
 
     const result = await prisma.$transaction(
