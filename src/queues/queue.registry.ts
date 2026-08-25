@@ -16,6 +16,7 @@ export const QUEUE_NAMES = {
   NOTIFICATIONS: 'notifications',
   ADHERENCE: 'adherence',
   OUTBOX: 'outbox',
+  BILLING: 'billing',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -36,6 +37,9 @@ export const JOB_NAMES = {
 
   // Outbox queue
   PROCESS_OUTBOX_EVENT: 'PROCESS_OUTBOX_EVENT',
+
+  // Billing queue
+  PROCESS_BILLING_EVENT: 'PROCESS_BILLING_EVENT',
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -112,6 +116,17 @@ export interface ProcessOutboxEventPayload {
 }
 
 /**
+ * Carries the recorded event's id and nothing else.
+ *
+ * The provider's payload is already durable in the row; putting it in the job
+ * too would give two copies that can disagree, and the row is the one that
+ * survives a Redis flush.
+ */
+export interface ProcessBillingEventPayload {
+  webhookEventId: string;
+}
+
+/**
  * Unchanged, and account-scoped on purpose. Prompting a caregiver about a
  * dependent's mood is not a coherent product action, so this asks an account
  * about itself.
@@ -126,6 +141,7 @@ export interface SendMoodPromptPushPayload {
 export const notificationsQueue = new Queue(QUEUE_NAMES.NOTIFICATIONS, defaultQueueOptions);
 export const adherenceQueue = new Queue(QUEUE_NAMES.ADHERENCE, defaultQueueOptions);
 export const outboxQueue = new Queue(QUEUE_NAMES.OUTBOX, defaultQueueOptions);
+export const billingQueue = new Queue(QUEUE_NAMES.BILLING, defaultQueueOptions);
 
 // Graceful shutdown helper
 export const closeQueues = async () => {
@@ -133,5 +149,6 @@ export const closeQueues = async () => {
     notificationsQueue.close(),
     adherenceQueue.close(),
     outboxQueue.close(),
+    billingQueue.close(),
   ]);
 };

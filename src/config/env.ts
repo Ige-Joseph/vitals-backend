@@ -65,6 +65,13 @@ const envSchema = z
     PREMIUM_SYMPTOM_CHECKS_PER_DAY: z.coerce.number().default(20),
     PREMIUM_DRUG_DETECTIONS_PER_DAY: z.coerce.number().default(20),
 
+    // Billing
+    // How long a failed renewal keeps Premium. Runs from the failed charge,
+    // not from the period end.
+    SUBSCRIPTION_PAST_DUE_GRACE_DAYS: z.coerce.number().default(7),
+    // How often reconciliation compares our state against the provider's.
+    BILLING_RECONCILE_INTERVAL_MS: z.coerce.number().default(3600000),
+
     // Reminder settings
     ADHERENCE_CHECK_DELAY_MS: z.coerce.number().default(1800000),
     MISSED_WINDOW_MS: z.coerce.number().default(7200000),

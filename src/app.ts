@@ -28,6 +28,7 @@ import aiMedicationDraftsRoutes from '@/modules/ai-medication-drafts/ai-medicati
 import calendarRoutes from '@/modules/calendar/calendar.routes';
 import personRoutes from '@/modules/person/person.routes';
 import billingRoutes from '@/modules/billing/billing.routes';
+import billingWebhookRoutes from '@/modules/billing/webhook.routes';
 
 
 
@@ -65,6 +66,11 @@ export const createApp = () => {
   // ─────────────────────────────────────────────
   // Body parsing
   // ─────────────────────────────────────────────
+  // Webhooks mount before the JSON parser so their raw bytes survive intact
+  // for signature verification. Parsing first would discard the exact body a
+  // provider signed over.
+  app.use(`${env.API_PREFIX}/billing/webhooks`, billingWebhookRoutes);
+
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 

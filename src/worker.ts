@@ -1,6 +1,7 @@
 import '@/config/env'; // Validate env before anything else
 import { notificationsWorker } from '@/workers/notifications.worker';
 import { adherenceWorker } from '@/workers/adherence.worker';
+import { billingWorker } from '@/workers/billing.worker';
 import {
   reminderSchedulerWorker,
   reminderSchedulerQueue,
@@ -29,7 +30,7 @@ const start = async () => {
   await startScheduledJobs();
 
   log.info('Worker process started', {
-    workers: ['notifications', 'adherence', 'reminder-scheduler'],
+    workers: ['notifications', 'adherence', 'billing', 'reminder-scheduler'],
   });
 
   const shutdown = async (signal: string) => {
@@ -38,6 +39,7 @@ const start = async () => {
     try {
       await notificationsWorker.close();
       await adherenceWorker.close();
+      await billingWorker.close();
       await reminderSchedulerWorker.close();
       await reminderSchedulerQueue.close();
       log.info('Workers closed');

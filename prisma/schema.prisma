@@ -215,6 +215,16 @@ enum SubscriptionStatus {
   EXPIRED
 }
 
+enum WebhookEventStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  /// Recorded and deliberately not applied — a stale event, or one for a
+  /// subscription we do not know about.
+  IGNORED
+  FAILED
+}
+
 enum PaymentTransactionType {
   CHARGE
   REFUND
@@ -622,6 +632,18 @@ model Subscription {
   currentPeriodStart DateTime?
   currentPeriodEnd   DateTime?
 
+  /// When the renewal first failed. The grace window runs from here, not from
+  /// currentPeriodEnd — a charge can fail mid-period, and "you have until the
+  /// period ends" would give one subscriber weeks and another minutes.
+  pastDueSince DateTime?
+
+  /// The provider's timestamp for the most recent event applied to this row.
+  /// Events older than this are stale and must not overwrite newer state:
+  /// webhooks arrive out of order, and arrival order is not event order.
+  providerUpdatedAt DateTime?
+
+  lastReconciledAt DateTime?
+
   /// Cancelled by the subscriber but still paid up until periodEnd.
   cancelAtPeriodEnd Boolean   @default(false)
   canceledAt        DateTime?
@@ -687,6 +709,40 @@ model PaymentTransaction {
   @@index([subscriptionId, occurredAt])
   @@index([providerCustomerRef])
   @@map("payment_transactions")
+}
+
+/// An inbound provider event.
+///
+/// Written before anything is acted on, so the HTTP response can be immediate
+/// and the work durable — the same shape as the outbox, pointed inward. A
+/// provider that does not get a fast 200 will retry, and retries are exactly
+/// what the uniqueness below makes harmless.
+model BillingWebhookEvent {
+  id       String          @id @default(uuid())
+  provider PaymentProvider
+
+  /// The provider's own event id. Unique per provider, which is what makes a
+  /// replay a no-op: the second insert loses and nothing is applied twice.
+  /// Keyed on the id rather than the payload, because a provider may resend a
+  /// byte-identical body or a re-serialised one, and neither should matter.
+  providerEventId String
+
+  type String
+
+  /// When the provider says it happened, not when it reached us.
+  occurredAt DateTime
+
+  payload Json @default("{}")
+
+  status      WebhookEventStatus @default(PENDING)
+  receivedAt  DateTime           @default(now())
+  processedAt DateTime?
+  retryCount  Int                @default(0)
+  error       String?
+
+  @@unique([provider, providerEventId])
+  @@index([status, receivedAt])
+  @@map("billing_webhook_events")
 }
 
 // ─────────────────────────────────────────────

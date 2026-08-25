@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import type { SubscriptionStatus } from '@prisma/client';
 
+import { env } from '@/config/env';
+
 import { TIER_ENTITLEMENTS, type BillingTier } from '@/config/billing.config';
 
 /**
@@ -43,6 +45,9 @@ export const entitlementService = {
    * failure. CANCELED still grants until the period ends, because it was paid
    * for. Both are bounded by currentPeriodEnd, so neither grants forever.
    *
+   * PAST_DUE is additionally bounded by a grace window running from the failed
+   * charge — `SUBSCRIPTION_PAST_DUE_GRACE_DAYS`, seven by default.
+   *
    * `endedAt` overrides all of that. Cancelling *at period end* leaves it null
    * and the subscriber keeps what they paid for; cancelling *now* — which is
    * what an erasing or deactivating account does — sets it, and access stops
@@ -51,13 +56,29 @@ export const entitlementService = {
    */
   async activeSubscription(userId: string) {
     const now = new Date();
+    const graceCutoff = new Date(
+      now.getTime() - env.SUBSCRIPTION_PAST_DUE_GRACE_DAYS * 86_400_000,
+    );
 
     return prisma.subscription.findFirst({
       where: {
         userId,
         status: { in: [...GRANTING] },
         OR: [{ currentPeriodEnd: null }, { currentPeriodEnd: { gt: now } }],
-        AND: [{ OR: [{ endedAt: null }, { endedAt: { gt: now } }] }],
+        AND: [
+          { OR: [{ endedAt: null }, { endedAt: { gt: now } }] },
+          // PAST_DUE is bounded by its own window, measured from the failed
+          // charge. Past it, entitlement goes regardless of where the paid
+          // period happens to end — otherwise a card that failed on day one of
+          // a year-long term would keep Premium for eleven more months.
+          {
+            OR: [
+              { status: { not: 'PAST_DUE' } },
+              { pastDueSince: null },
+              { pastDueSince: { gt: graceCutoff } },
+            ],
+          },
+        ],
       },
       orderBy: { createdAt: 'desc' },
       include: { price: true },

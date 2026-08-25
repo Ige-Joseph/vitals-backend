@@ -1,4 +1,6 @@
 import { PrismaClient } from '@prisma/client';
+
+import { billingService } from '@/modules/billing/billing.service';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -7,6 +9,13 @@ const BCRYPT_ROUNDS = 12;
 
 async function main() {
   console.log('🌱 Seeding database...');
+
+  // Prices are rows, and a subscription points at one. Seeding them from the
+  // config is what makes a price resolvable long after the config has moved
+  // on. Insert-only: an existing row is never updated, because a price anyone
+  // may have bought must not change underneath them.
+  const { inserted } = await billingService.syncPrices();
+  console.log(`✅ Prices synced from config: ${inserted} inserted`);
 
   // ─── Admin user ──────────────────────────────────────────────────────
   const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@vitals.health';
