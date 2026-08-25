@@ -10,6 +10,7 @@ import {
 import { emailService } from '@/providers/email/email.service';
 import { outboxRepository } from '@/modules/outbox/outbox.repository';
 import { prisma } from '@/lib/prisma';
+import { recipientResolver } from '@/modules/care/recipient.resolver';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('notifications-worker');
@@ -102,8 +103,30 @@ export const notificationsWorker = new Worker(
           outboxEventId: string;
         };
 
+        // Resolve the address now. An email snapshot taken at enqueue goes
+        // stale exactly as a userId does — the account may have been erased
+        // since, which frees the address for someone else entirely.
+        // `payload.userId`/`payload.email` drain the pre-change shape.
+        const recipients = await recipientResolver.forPerson(
+          payload.personId,
+          payload.userId,
+        );
+
+        const to = recipients[0]?.email ?? payload.email;
+
+        if (!to) {
+          log.error('Medication fallback email has no eligible recipient', {
+            jobId: job.id,
+            reminderId: payload.reminderId,
+            personId: payload.personId ?? null,
+          });
+          // Processed, not retried: retrying resolves to nobody again.
+          await outboxRepository.markProcessed(payload.outboxEventId);
+          break;
+        }
+
         await emailService.sendMedicationFallbackEmail({
-          to: payload.email,
+          to,
           medicationName: payload.medicationName,
           scheduledFor: payload.scheduledFor,
         });

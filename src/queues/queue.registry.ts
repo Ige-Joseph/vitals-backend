@@ -57,35 +57,65 @@ export interface SendPasswordResetEmailPayload {
   rawToken: string;
 }
 
+/**
+ * Care-related payloads carry what the job is *about*, never who receives it.
+ *
+ * A recipient baked in at enqueue goes stale in more ways than one: a record
+ * claimed, a membership revoked, an account deactivated or erased, ownership
+ * handed over. Resolving late fixes all of them by construction, and matches
+ * how dispatchReminder already works — it claims the reminder, then re-reads
+ * fresh state before acting.
+ *
+ * The legacy fields below are read, never written. They exist so a worker can
+ * drain jobs enqueued before this change; they come out after one release.
+ */
 export interface SendPushReminderPayload {
   reminderId: string;
   careEventId: string;
-  userId: string;
+  personId: string;
   title: string;
   body: string;
+
+  /** @deprecated Legacy enqueue shape. Read as a fallback, never written. */
+  userId?: string;
 }
 
 export interface SendMedicationFallbackEmailPayload {
   reminderId: string;
-  userId: string;
-  email: string;
+  personId: string;
   medicationName: string;
   scheduledFor: string;
+
+  /**
+   * @deprecated Legacy enqueue shape. An email snapshot goes stale exactly
+   * like a userId does — the address may have changed, or the account may
+   * have been erased and the address freed for someone else.
+   */
+  userId?: string;
+  email?: string;
 }
 
 export interface CheckMedicationAdherencePayload {
   reminderId: string;
   careEventId: string;
-  userId: string;
-  email: string;
+  personId: string;
   medicationName: string;
   scheduledFor: string;
+
+  /** @deprecated Legacy enqueue shape. Read as a fallback, never written. */
+  userId?: string;
+  email?: string;
 }
 
 export interface ProcessOutboxEventPayload {
   outboxEventId: string;
 }
 
+/**
+ * Unchanged, and account-scoped on purpose. Prompting a caregiver about a
+ * dependent's mood is not a coherent product action, so this asks an account
+ * about itself.
+ */
 export interface SendMoodPromptPushPayload {
   userId: string;
 }

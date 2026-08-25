@@ -7,6 +7,7 @@ import {
   notificationsQueue,
 } from '@/queues/queue.registry';
 import { prisma } from '@/lib/prisma';
+import { recipientResolver } from '@/modules/care/recipient.resolver';
 import { outboxRepository } from '@/modules/outbox/outbox.repository';
 import { createLogger } from '@/lib/logger';
 
@@ -26,15 +27,50 @@ export const adherenceWorker = new Worker(
     }
 
     const payload = job.data as CheckMedicationAdherencePayload;
-    const { reminderId, careEventId, userId, email, medicationName, scheduledFor } = payload;
+    const { reminderId, careEventId, personId, medicationName, scheduledFor } = payload;
 
-    // Idempotency — check if fallback already attempted for this reminder
+    // Resolve the recipient now, not at enqueue. This job was delayed by half
+    // an hour; the membership that justified it may have been revoked since.
+    // `payload.userId` drains jobs enqueued before payloads carried a subject.
+    const recipients = await recipientResolver.forPerson(personId, payload.userId);
+
+    if (recipients.length === 0) {
+      log.error('Adherence check has no eligible recipient', {
+        reminderId,
+        personId: personId ?? null,
+      });
+
+      await prisma.notificationAttempt
+        .create({
+          data: {
+            reminderId,
+            channel: 'EMAIL',
+            type: 'FALLBACK_EMAIL',
+            status: 'SKIPPED',
+            idempotencyKey: `fallback:${reminderId}:none`,
+            errorMessage: 'NO_ELIGIBLE_RECIPIENT',
+          },
+        })
+        .catch(() => undefined);
+      return;
+    }
+
+    const recipient = recipients[0];
+
+    // The key names the resolved recipient. Two people must not share one key
+    // — otherwise a handoff between enqueue and delivery would let the second
+    // recipient's send be swallowed as a duplicate of the first's.
+    const idempotencyKey = `fallback:${reminderId}:${recipient.id}`;
+
     const existingAttempt = await prisma.notificationAttempt.findUnique({
-      where: { idempotencyKey: `fallback:${reminderId}` },
+      where: { idempotencyKey },
     });
 
     if (existingAttempt) {
-      log.info('Fallback already attempted for reminder, skipping', { reminderId });
+      log.info('Fallback already attempted for this reminder and recipient, skipping', {
+        reminderId,
+        recipientId: recipient.id,
+      });
       return;
     }
 
@@ -59,7 +95,7 @@ export const adherenceWorker = new Worker(
           channel: 'EMAIL',
           type: 'FALLBACK_EMAIL',
           status: 'SKIPPED',
-          idempotencyKey: `fallback:${reminderId}`,
+          idempotencyKey,
         },
       });
       return;
@@ -80,19 +116,20 @@ export const adherenceWorker = new Worker(
           channel: 'EMAIL',
           type: 'FALLBACK_EMAIL',
           status: 'SENT',
-          idempotencyKey: `fallback:${reminderId}`,
+          idempotencyKey,
         },
       });
 
       // Create outbox event — worker will pick it up and send email
       await outboxRepository.create(
         {
-          userId,
+          // The outbox row is owned by the account that will be emailed, so
+          // erasure can null it. The payload carries the subject.
+          userId: recipient.id,
           type: 'MEDICATION_FALLBACK_EMAIL',
           payload: {
             reminderId,
-            userId,
-            email,
+            personId: personId ?? undefined,
             medicationName,
             scheduledFor,
           },
@@ -101,7 +138,7 @@ export const adherenceWorker = new Worker(
       );
     });
 
-    log.info('Fallback outbox event created', { reminderId, userId });
+    log.info('Fallback outbox event created', { reminderId, recipientId: recipient.id });
   },
   {
     connection: redisConnection,

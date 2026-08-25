@@ -147,7 +147,7 @@ export const reminderEngine = {
           status: 'SKIPPED',
           // Deterministic, so a retry records the fact once rather than
           // accumulating a row per attempt.
-          idempotencyKey: `no-recipient-${reminder.id}`,
+          idempotencyKey: `no-recipient:${reminder.id}`,
           errorMessage: reason,
         },
       });
@@ -249,8 +249,9 @@ export const reminderEngine = {
           {
             reminderId,
             careEventId: careEvent.id,
-            userId: user.id,
-            email: user.email,
+            // Whose dose this is. Who to tell is resolved when the check runs,
+            // half an hour later, by which time the answer may have changed.
+            personId: careEvent.carePlan?.personId ?? undefined,
             medicationName,
             scheduledFor: careEvent.scheduledFor.toISOString(),
           },
@@ -307,8 +308,7 @@ export const reminderEngine = {
         userId: user.id,
         type: 'MEDICATION_FALLBACK_EMAIL',
         payload: {
-          userId: user.id,
-          email: user.email,
+          personId: careEvent.carePlan?.personId ?? undefined,
           reminderId: reminder.id,
           careEventId: careEvent.id,
           medicationName,

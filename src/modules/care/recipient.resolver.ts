@@ -24,6 +24,54 @@ export interface Recipient {
  * on exactly one membership per Person — the managing OWNER.
  */
 export const recipientResolver = {
+  /**
+   * Who receives a notification about a Person, resolved now rather than at
+   * enqueue. Used by the workers, which carry a personId and nothing else.
+   *
+   * `legacyUserId` drains jobs enqueued before payloads carried a subject. It
+   * still applies the liveness checks — an old job must not deliver to a
+   * deactivated or erased account either.
+   */
+  async forPerson(personId: string | undefined, legacyUserId?: string): Promise<Recipient[]> {
+    if (personId) {
+      const memberships = await prisma.personMembership.findMany({
+        where: {
+          personId,
+          status: 'ACTIVE',
+          receivesNotifications: true,
+          user: { isActive: true, erasedAt: null },
+        },
+        select: {
+          user: {
+            select: { id: true, email: true, profile: { select: { timezone: true } } },
+          },
+        },
+      });
+
+      if (memberships.length > 0) {
+        return memberships.map((m) => ({
+          id: m.user.id,
+          email: m.user.email,
+          timezone: m.user.profile?.timezone ?? null,
+        }));
+      }
+
+      log.warn('No eligible recipient for person', { personId });
+      return [];
+    }
+
+    if (!legacyUserId) return [];
+
+    const user = await prisma.user.findFirst({
+      where: { id: legacyUserId, isActive: true, erasedAt: null },
+      select: { id: true, email: true, profile: { select: { timezone: true } } },
+    });
+
+    return user
+      ? [{ id: user.id, email: user.email, timezone: user.profile?.timezone ?? null }]
+      : [];
+  },
+
   async forCarePlan(carePlan: {
     id: string;
     userId: string;
