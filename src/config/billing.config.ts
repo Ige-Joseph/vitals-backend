@@ -39,11 +39,20 @@ export const TIER_ENTITLEMENTS: Record<BillingTier, TierEntitlements> = {
   },
 };
 
+export interface TierPrice {
+  /** Minor units — kobo — so no float ever touches a price. */
+  amountMinor: number;
+  currency: 'NGN';
+  interval: 'month' | 'year';
+}
+
 export interface TierDescription {
   tier: BillingTier;
   name: string;
   summary: string;
   includes: string[];
+  /** Null for a tier nobody pays for. */
+  price: TierPrice | null;
 }
 
 /**
@@ -63,6 +72,7 @@ export const TIER_DESCRIPTIONS: Record<BillingTier, TierDescription> = {
       'Your first baby, including their vaccination schedule',
       'Symptom checks and medicine scans, with a daily limit',
     ],
+    price: null,
   },
   PREMIUM: {
     tier: 'PREMIUM',
@@ -74,5 +84,13 @@ export const TIER_DESCRIPTIONS: Record<BillingTier, TierDescription> = {
       'Connect with up to 5 adults who share their record with you',
       'Their reminders and history alongside your own',
     ],
+    // PLACEHOLDER — this number has not been decided. It is here so the price
+    // has exactly one home once it is, rather than being written into a page.
+    // Minor units avoid floating point ever touching money.
+    price: {
+      amountMinor: 200000, // ₦2,000
+      currency: 'NGN',
+      interval: 'month',
+    },
   },
 };
