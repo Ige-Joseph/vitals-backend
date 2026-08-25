@@ -306,9 +306,22 @@ export const personMembershipService = {
   /**
    * Revoke access. Removing a relationship removes access only — it never
    * deletes an account and never deletes health data.
+   *
+   * A member may always end their own membership, whatever their role. Someone
+   * who shared their record with you can revoke you, and you must equally be
+   * able to walk away; requiring `manage` to leave would mean a caregiver
+   * needed the owner's permission to stop holding their health data.
+   *
+   * Revoking *someone else* still requires `manage`, so only an owner can do
+   * that. The last owner cannot be revoked by either route — handoff is the
+   * path, or the record would be stranded with nobody able to act on it.
    */
   async revoke(userId: string, personId: string, targetUserId: string) {
-    await personAccess.assertPersonAccess(userId, personId, 'manage');
+    const isSelfRevoke = targetUserId === userId;
+
+    if (!isSelfRevoke) {
+      await personAccess.assertPersonAccess(userId, personId, 'manage');
+    }
 
     const membership = await prisma.personMembership.findUnique({
       where: { personId_userId: { personId, userId: targetUserId } },
@@ -347,14 +360,20 @@ export const personMembershipService = {
           personId,
           subjectUserId: targetUserId,
           actorUserId: userId,
-          action: 'REVOKED',
+          // Who ended the relationship is part of the record, not an
+          // implementation detail.
+          action: isSelfRevoke ? 'LEFT' : 'REVOKED',
           role: membership.role,
-          basis: 'owner-revoke',
+          basis: isSelfRevoke ? 'self-revoke' : 'owner-revoke',
         },
         tx,
       );
 
-      log.info('Access revoked', { personId, targetUserId, actorUserId: userId });
+      log.info(isSelfRevoke ? 'Member left record' : 'Access revoked', {
+        personId,
+        targetUserId,
+        actorUserId: userId,
+      });
       return revoked;
     });
   },

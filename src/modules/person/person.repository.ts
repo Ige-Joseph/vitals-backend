@@ -153,6 +153,7 @@ export const personRepository = {
         | 'ACCEPTED'
         | 'CLAIMED'
         | 'REVOKED'
+        | 'LEFT'
         | 'TRANSFERRED'
         | 'ARCHIVED'
         | 'ERASED';

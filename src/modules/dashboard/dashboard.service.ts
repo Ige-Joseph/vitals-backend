@@ -162,6 +162,7 @@ export const dashboardService = {
             id: true,
             displayName: true,
             ownerUserId: true,
+            claimedAt: true,
             origin: true,
             dateOfBirth: true,
           },
@@ -180,12 +181,24 @@ export const dashboardService = {
           },
         });
 
+        // Three distinct relationships, not two. `ownerUserId` says who has
+        // claimed the record: nobody (a dependent this account manages), the
+        // caller (their own), or another account (an adult who shared theirs).
+        // Treating the third as "managed" was simply false.
+        const relationship =
+          m.person.ownerUserId === userId
+            ? 'self'
+            : m.person.ownerUserId === null
+              ? 'managed'
+              : 'connected';
+
         return {
           personId: m.person.id,
           displayName: m.person.displayName,
           // The label the client shows. Honest because it names the Person
           // and says how the caller reaches them.
-          relationship: m.person.ownerUserId === userId ? 'self' : 'managed',
+          relationship,
+          isClaimed: m.person.claimedAt !== null,
           origin: m.person.origin,
           role: m.role,
           isSelected: m.person.id === selectedPersonId,

@@ -153,7 +153,15 @@ enum AccessAction {
   GRANTED
   ACCEPTED
   CLAIMED
+
+  /// An owner removed someone else's access.
   REVOKED
+
+  /// A member removed their own access. Distinct from REVOKED on purpose:
+  /// "they took my access away" and "I walked away" are different facts about
+  /// a consent relationship, and the ledger has to be able to tell them apart.
+  LEFT
+
   TRANSFERRED
   ARCHIVED
   ERASED
