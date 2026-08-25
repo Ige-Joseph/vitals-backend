@@ -39,20 +39,110 @@ export const TIER_ENTITLEMENTS: Record<BillingTier, TierEntitlements> = {
   },
 };
 
-export interface TierPrice {
-  /** Minor units — kobo — so no float ever touches a price. */
+/**
+ * A price someone can buy a tier at.
+ *
+ * Amounts are in minor units — kobo — so no float ever touches money.
+ *
+ * ── Repricing, and why `id` and `active` exist ──────────────────────────
+ *
+ * When the price changes, whoever already subscribed keeps what they signed
+ * up at. That only works if a price is an immutable *record* rather than a
+ * number that gets edited, so the rule for changing a price is:
+ *
+ *   1. add a new entry with a new `id`
+ *   2. set `active: false` on the old one
+ *   3. never edit `amountMinor` on an entry anyone may have bought
+ *
+ * Retired entries stay in this file. A subscription (once a provider exists)
+ * stores the `id` it was bought at, and resolving that id has to keep working
+ * for as long as anyone holds it — which is what lets a renewal charge the
+ * old amount and a receipt describe it correctly years later.
+ *
+ * Only `active` entries are offered for purchase; `priceById` resolves any
+ * entry, live or retired. Nothing here enforces grandfathering yet — there is
+ * no subscription table to enforce it against — but nothing here prevents it
+ * either, which is the point.
+ */
+export interface BillingPrice {
+  /** Stable and immutable. Never reused, never repointed at a new amount. */
+  id: string;
+  label: string;
   amountMinor: number;
   currency: 'NGN';
+  /** Billing period, expressed as data so a new one is an entry, not a branch. */
   interval: 'month' | 'year';
+  intervalCount: number;
+  /** Offered for purchase. Retired prices stay resolvable for existing holders. */
+  active: boolean;
+  /**
+   * Not yet validated against real users. Both current amounts are guesses at
+   * what this market will bear; neither has been tested.
+   */
+  provisional: boolean;
 }
+
+/** Months a period covers, so any interval normalises without branching. */
+const MONTHS_PER_INTERVAL: Record<BillingPrice['interval'], number> = {
+  month: 1,
+  year: 12,
+};
+
+export const monthsIn = (price: BillingPrice): number =>
+  MONTHS_PER_INTERVAL[price.interval] * price.intervalCount;
+
+/** What the period works out to per month, for comparing unlike periods. */
+export const perMonthMinor = (price: BillingPrice): number =>
+  Math.round(price.amountMinor / monthsIn(price));
+
+export interface PricedPeriod extends BillingPrice {
+  perMonthMinor: number;
+  /** Whole-percent saving against the costliest period per month. 0 if none. */
+  savingPercent: number;
+  savingMinorPerYear: number;
+}
+
+/**
+ * Decorate the sellable prices for a tier with their per-month cost and the
+ * saving against the dearest option.
+ *
+ * The baseline is derived — the period with the highest per-month cost — not
+ * hardcoded to "monthly". Add a quarterly price and it slots in without this
+ * function changing.
+ */
+export const describePrices = (prices: BillingPrice[]): PricedPeriod[] => {
+  const sellable = prices.filter((p) => p.active);
+  if (sellable.length === 0) return [];
+
+  // Compare annualised, not per-month. perMonthMinor rounds to whole kobo, and
+  // multiplying a rounded figure back up drifts — ₦10,000/year would report a
+  // saving of ₦2,000.04 rather than ₦2,000.
+  const annualised = (price: BillingPrice) =>
+    Math.round((price.amountMinor * 12) / monthsIn(price));
+
+  const baseline = Math.max(...sellable.map(annualised));
+
+  return sellable
+    .map((price) => {
+      const perYear = annualised(price);
+      return {
+        ...price,
+        perMonthMinor: perMonthMinor(price),
+        savingPercent:
+          baseline === 0 ? 0 : Math.round(((baseline - perYear) / baseline) * 100),
+        savingMinorPerYear: baseline - perYear,
+      };
+    })
+    .sort((a, b) => monthsIn(a) - monthsIn(b));
+};
 
 export interface TierDescription {
   tier: BillingTier;
   name: string;
   summary: string;
   includes: string[];
-  /** Null for a tier nobody pays for. */
-  price: TierPrice | null;
+  /** Empty for a tier nobody pays for. Every sellable period, cheapest first. */
+  prices: BillingPrice[];
 }
 
 /**
@@ -72,7 +162,7 @@ export const TIER_DESCRIPTIONS: Record<BillingTier, TierDescription> = {
       'Your first baby, including their vaccination schedule',
       'Symptom checks and medicine scans, with a daily limit',
     ],
-    price: null,
+    prices: [],
   },
   PREMIUM: {
     tier: 'PREMIUM',
@@ -84,13 +174,40 @@ export const TIER_DESCRIPTIONS: Record<BillingTier, TierDescription> = {
       'Connect with up to 5 adults who share their record with you',
       'Their reminders and history alongside your own',
     ],
-    // PLACEHOLDER — this number has not been decided. It is here so the price
-    // has exactly one home once it is, rather than being written into a page.
-    // Minor units avoid floating point ever touching money.
-    price: {
-      amountMinor: 200000, // ₦2,000
-      currency: 'NGN',
-      interval: 'month',
-    },
+    // Both provisional until validated against real users. To change either,
+    // add a new entry and retire the old one — never edit an amount in place.
+    prices: [
+      {
+        id: 'premium-monthly-2026-08',
+        label: 'Monthly',
+        amountMinor: 100_000, // ₦1,000
+        currency: 'NGN',
+        interval: 'month',
+        intervalCount: 1,
+        active: true,
+        provisional: true,
+      },
+      {
+        id: 'premium-annual-2026-08',
+        label: 'Yearly',
+        amountMinor: 1_000_000, // ₦10,000 — two months free against monthly
+        currency: 'NGN',
+        interval: 'year',
+        intervalCount: 1,
+        active: true,
+        provisional: true,
+      },
+    ],
   },
 };
+
+/**
+ * Resolve any price by id, live or retired.
+ *
+ * Existing subscribers hold ids that may no longer be for sale, and a renewal
+ * or a receipt still has to describe them.
+ */
+export const priceById = (id: string): BillingPrice | undefined =>
+  Object.values(TIER_DESCRIPTIONS)
+    .flatMap((tier) => tier.prices)
+    .find((price) => price.id === id);

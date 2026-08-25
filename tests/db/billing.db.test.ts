@@ -202,6 +202,47 @@ describe('the write path is not open to anyone', () => {
   });
 });
 
+describe('pricing is data, not branches', () => {
+  it('offers both periods with the saving computed, not left to the reader', async () => {
+    const user = await createUser();
+    const res = await request(app).get('/api/v1/billing/plan').set(...authHeader(user));
+
+    const premium = res.body.data.tiers.find((t: any) => t.tier === 'PREMIUM');
+    const [monthly, annual] = premium.prices;
+
+    // Cheapest period first, so a client renders in order without sorting.
+    expect(monthly.interval).toBe('month');
+    expect(annual.interval).toBe('year');
+
+    expect(monthly.amountMinor).toBe(100_000);
+    expect(annual.amountMinor).toBe(1_000_000);
+
+    // Ten months' money for twelve months of service.
+    expect(annual.perMonthMinor).toBeLessThan(monthly.perMonthMinor);
+    expect(annual.savingPercent).toBe(17);
+    expect(annual.savingMinorPerYear).toBe(200_000);
+
+    // The baseline is derived, so the dearest period saves nothing rather
+    // than the code assuming "monthly" is always the reference.
+    expect(monthly.savingPercent).toBe(0);
+  });
+
+  it('marks both amounts provisional and offers only sellable prices', async () => {
+    const user = await createUser();
+    const res = await request(app).get('/api/v1/billing/plan').set(...authHeader(user));
+
+    const premium = res.body.data.tiers.find((t: any) => t.tier === 'PREMIUM');
+    expect(premium.prices.every((p: any) => p.provisional)).toBe(true);
+    expect(premium.prices.every((p: any) => p.active)).toBe(true);
+    // Every price carries a stable id, which is what a subscription will hold
+    // so a later reprice cannot change what an existing subscriber pays.
+    expect(premium.prices.every((p: any) => typeof p.id === 'string' && p.id)).toBe(true);
+
+    const free = res.body.data.tiers.find((t: any) => t.tier === 'FREE');
+    expect(free.prices).toEqual([]);
+  });
+});
+
 describe('purchase happens on the web', () => {
   it('offers an absolute checkout URL outside the app', async () => {
     const user = await createUser();

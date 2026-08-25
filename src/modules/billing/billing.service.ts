@@ -5,7 +5,9 @@ import { createLogger } from '@/lib/logger';
 import {
   TIER_ENTITLEMENTS,
   TIER_DESCRIPTIONS,
+  describePrices,
   type BillingTier,
+  type TierDescription,
 } from '@/config/billing.config';
 
 const log = createLogger('billing-service');
@@ -38,6 +40,15 @@ export const billingService = {
     return `${env.FRONTEND_URL.replace(/\/$/, '')}/billing`;
   },
 
+  /**
+   * A tier with its sellable periods decorated — per-month cost and the saving
+   * against the dearest option, computed rather than left to the client so
+   * every surface shows the same number.
+   */
+  describeTier(tier: TierDescription) {
+    return { ...tier, prices: describePrices(tier.prices) };
+  },
+
   /** The caller's tier, what it grants, and what the other tier would. */
   async getPlan(userId: string) {
     const user = await prisma.user.findUniqueOrThrow({
@@ -53,14 +64,14 @@ export const billingService = {
 
     return {
       tier,
-      description: TIER_DESCRIPTIONS[tier],
+      description: billingService.describeTier(TIER_DESCRIPTIONS[tier]),
       // The account's actual columns, which may differ from the tier default
       // if someone was granted an override.
       entitlements: {
         managedPersonLimit: user.managedPersonLimit,
         connectionLimit: user.connectionLimit,
       },
-      tiers: Object.values(TIER_DESCRIPTIONS),
+      tiers: Object.values(TIER_DESCRIPTIONS).map(billingService.describeTier),
       checkoutUrl: billingService.checkoutUrl(),
     };
   },
