@@ -7,6 +7,22 @@ const log = createLogger('quota-service');
 
 type QuotaFeature = 'symptomCheck' | 'drugDetection';
 
+/**
+ * The tier is read from the database, never from the access token.
+ *
+ * The token carries planType and lives for 15 minutes, so a token minted
+ * before an upgrade says FREE afterwards. Serving entitlement from it is the
+ * "I paid and nothing happened" bug: the user is charged and then told they
+ * have run out of checks. One indexed lookup is the right price for that.
+ */
+const readTier = async (userId: string): Promise<string> => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { planType: true },
+  });
+  return user?.planType ?? 'FREE';
+};
+
 const getLimit = (planType: string, feature: QuotaFeature): number => {
   const isPremium = planType === 'PREMIUM';
   if (feature === 'symptomCheck') {
@@ -27,9 +43,9 @@ export const quotaService = {
    * Throws QUOTA_EXCEEDED if the user is at their daily limit.
    * Must be called before any AI operation.
    */
-  async checkAndIncrement(userId: string, planType: string, feature: QuotaFeature): Promise<void> {
+  async checkAndIncrement(userId: string, feature: QuotaFeature): Promise<void> {
     const today = getToday();
-    const limit = getLimit(planType, feature);
+    const limit = getLimit(await readTier(userId), feature);
     const field = feature === 'symptomCheck' ? 'symptomChecksUsed' : 'drugDetectionsUsed';
 
     // Ensure today's row exists. Two first-calls of the day can both find it
@@ -69,8 +85,9 @@ export const quotaService = {
     log.info('Quota claimed', { userId, feature, field, limit });
   },
 
-  async getUsage(userId: string, planType: string) {
+  async getUsage(userId: string) {
     const today = getToday();
+    const planType = await readTier(userId);
     const usage = await prisma.dailyUsage.findUnique({
       where: { userId_date: { userId, date: today } },
     });

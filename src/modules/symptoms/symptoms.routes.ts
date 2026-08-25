@@ -118,11 +118,7 @@ router.post('/check', async (req: AuthenticatedRequest, res: Response, next: Nex
       'write',
     );
 
-    await quotaService.checkAndIncrement(
-      req.user!.sub,
-      req.user!.planType,
-      'symptomCheck',
-    );
+    await quotaService.checkAndIncrement(req.user!.sub, 'symptomCheck');
 
     const prompt = `A user reports the following symptoms: "${parsedRequest.data.symptomsText}"
 

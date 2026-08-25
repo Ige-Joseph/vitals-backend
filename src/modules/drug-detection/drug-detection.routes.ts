@@ -106,11 +106,7 @@ router.post(
     try {
       if (!req.file) return badRequest(res, 'Image file is required');
 
-      await quotaService.checkAndIncrement(
-        req.user!.sub,
-        req.user!.planType,
-        'drugDetection',
-      );
+      await quotaService.checkAndIncrement(req.user!.sub, 'drugDetection');
 
       const base64 = req.file.buffer.toString('base64');
       const mimeType = req.file.mimetype;

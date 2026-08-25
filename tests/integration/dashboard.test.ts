@@ -15,6 +15,8 @@ jest.mock('@/lib/prisma', () => ({
     },
     activityLog: { findMany: jest.fn().mockResolvedValue([]) },
     dailyUsage: { findUnique: jest.fn().mockResolvedValue(null) },
+    // getUsageSummary delegates to the quota service, which reads the tier.
+    user: { findUnique: jest.fn().mockResolvedValue({ planType: 'FREE' }) },
     person: {
       findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }),
       findUniqueOrThrow: jest.fn().mockResolvedValue({

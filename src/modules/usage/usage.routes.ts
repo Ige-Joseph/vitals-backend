@@ -21,7 +21,7 @@ router.use(authenticate);
  */
 router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const usage = await quotaService.getUsage(req.user!.sub, req.user!.planType);
+    const usage = await quotaService.getUsage(req.user!.sub);
     return ok(res, usage, 'Usage retrieved');
   } catch (err) {
     next(err);

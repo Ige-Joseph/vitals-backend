@@ -4,6 +4,9 @@ import { env } from '@/config/env';
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {
+    // The tier is read from the database now, not from the access token, so a
+    // token minted before an upgrade cannot serve stale limits.
+    user: { findUnique: jest.fn() },
     dailyUsage: {
       upsert: jest.fn(),
       updateMany: jest.fn(),
@@ -20,15 +23,22 @@ const mockUsage = (prisma as any).dailyUsage as {
 
 const prismaError = (code: string) => Object.assign(new Error(code), { code });
 
+const mockUser = (prisma as any).user as { findUnique: jest.Mock };
+
+/** Set the tier the database will report for the account under test. */
+const onTier = (planType: 'FREE' | 'PREMIUM') =>
+  mockUser.findUnique.mockResolvedValue({ planType });
+
 describe('quotaService.checkAndIncrement', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    onTier('FREE');
     mockUsage.upsert.mockResolvedValue({});
     mockUsage.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it('claims one unit with a conditional update rather than read-then-write', async () => {
-    await quotaService.checkAndIncrement('user-1', 'FREE', 'symptomCheck');
+    await quotaService.checkAndIncrement('user-1', 'symptomCheck');
 
     expect(mockUsage.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -47,12 +57,13 @@ describe('quotaService.checkAndIncrement', () => {
     mockUsage.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(
-      quotaService.checkAndIncrement('user-1', 'FREE', 'symptomCheck'),
+      quotaService.checkAndIncrement('user-1', 'symptomCheck'),
     ).rejects.toMatchObject({ errorCode: 'QUOTA_EXCEEDED', statusCode: 429 });
   });
 
   it('uses the premium limit for premium users', async () => {
-    await quotaService.checkAndIncrement('user-1', 'PREMIUM', 'drugDetection');
+    onTier('PREMIUM');
+    await quotaService.checkAndIncrement('user-1', 'drugDetection');
 
     expect(mockUsage.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -68,7 +79,7 @@ describe('quotaService.checkAndIncrement', () => {
     mockUsage.upsert.mockRejectedValue(prismaError('P2002'));
 
     await expect(
-      quotaService.checkAndIncrement('user-1', 'FREE', 'symptomCheck'),
+      quotaService.checkAndIncrement('user-1', 'symptomCheck'),
     ).resolves.toBeUndefined();
 
     expect(mockUsage.updateMany).toHaveBeenCalled();
@@ -78,7 +89,7 @@ describe('quotaService.checkAndIncrement', () => {
     mockUsage.upsert.mockRejectedValue(prismaError('P1001'));
 
     await expect(
-      quotaService.checkAndIncrement('user-1', 'FREE', 'symptomCheck'),
+      quotaService.checkAndIncrement('user-1', 'symptomCheck'),
     ).rejects.toMatchObject({ code: 'P1001' });
 
     expect(mockUsage.updateMany).not.toHaveBeenCalled();

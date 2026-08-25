@@ -1,7 +1,7 @@
 import { careRepository } from '@/modules/care/care.repository';
 import { personAccess } from '@/modules/person/person.access';
 import { prisma } from '@/lib/prisma';
-import { env } from '@/config/env';
+import { quotaService } from '@/modules/usage/quota.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('dashboard-service');
@@ -79,20 +79,20 @@ export const dashboardService = {
   /**
    * Account-scoped: AI quota is metered per login, not per body. Scoping it to
    * a Person would make Persons a quota multiplier.
+   *
+   * The limits used to be the FREE constants regardless of tier, so a premium
+   * account's dashboard understated its own allowance. It now delegates to the
+   * quota service, which reads the tier from the database.
    */
   async getUsageSummary(userId: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const usage = await quotaService.getUsage(userId);
 
-    const usage = await prisma.dailyUsage.findUnique({
-      where: { userId_date: { userId, date: today } },
-    });
-
+    // Flattened for the dashboard's tile row; the quota service groups them.
     return {
-      symptomChecksUsed: usage?.symptomChecksUsed ?? 0,
-      symptomChecksLimit: env.FREE_SYMPTOM_CHECKS_PER_DAY,
-      drugDetectionsUsed: usage?.drugDetectionsUsed ?? 0,
-      drugDetectionsLimit: env.FREE_DRUG_DETECTIONS_PER_DAY,
+      symptomChecksUsed: usage.symptomChecks.used,
+      symptomChecksLimit: usage.symptomChecks.limit,
+      drugDetectionsUsed: usage.drugDetections.used,
+      drugDetectionsLimit: usage.drugDetections.limit,
     };
   },
 
