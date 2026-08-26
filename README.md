@@ -177,6 +177,7 @@ npm test                 # Mocked suites
 npm run test:coverage    # …with coverage
 npm run test:db          # Database-backed suites
 npm run verify:openapi   # Check every route is documented and every $ref resolves
+npm run verify:docs      # Check the docs still match the code
 npm run db:seed          # Seed
 npm run db:reset         # Reset and re-seed
 npm run prisma:generate  # Regenerate the Prisma client
@@ -268,7 +269,7 @@ Further reading:
 
 `.github/workflows/build.yml` runs on push, in two jobs:
 
-- **Typecheck, test, build** — `prisma generate`, `typecheck`, `verify:openapi`, `npm test`, `build`
+- **Typecheck, test, build** — `prisma generate`, `typecheck`, `verify:openapi`, `verify:docs`, `npm test`, `build`
 - **Database-backed integration tests** — spins up Postgres and runs `tests/db`
 
 ---

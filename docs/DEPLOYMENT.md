@@ -175,7 +175,7 @@ against it.
 
 | Repository | Job | Steps |
 |---|---|---|
-| `vitals-backend` | Typecheck, test, build | `npm ci` → `prisma generate` → `typecheck` → `verify:openapi` → `npm test` → `build` |
+| `vitals-backend` | Typecheck, test, build | `npm ci` → `prisma generate` → `typecheck` → `verify:openapi` → `verify:docs` → `npm test` → `build` |
 | `vitals-backend` | Database-backed integration tests | `npm ci` → `prisma generate` → `npm run test:db` |
 | `vitals-frontend` | Build | `npm ci` → `tsc && vite build` |
 
@@ -190,11 +190,24 @@ issues real queries. This is the job that can catch a cross-person data leak;
 the mocked suites cannot, because a mocked client answers whatever it was told
 to.
 
-`verify:openapi` runs as a step in the first job. It fails if a route is
-undocumented, a block's YAML does not parse, or a `$ref` does not resolve —
-which is what catches a new route landing without documentation. It is static
-and needs no database, so it sits beside the typecheck rather than in the
-database job.
+Two static verifiers run as steps in the first job, both beside the typecheck
+rather than in the database job because neither needs Postgres.
+
+`verify:openapi` fails if a route is undocumented, a block's YAML does not
+parse, or a `$ref` does not resolve — which is what catches a new route landing
+without documentation.
+
+`verify:docs` fails if the documentation stops matching the code: a broken link
+or anchor, a connection string that no longer matches `docker-compose.yml`, an
+environment variable that is not in `src/config/env.ts`, an `npm run` that does
+not exist,
+or a `src/…` path that has moved. It reads source files as text and imports
+nothing, so it needs no environment at all and cannot fail for configuration
+reasons.
+
+Neither checks whether the prose is *true* — only whether the identifiers in it
+are real. A sentence can still be wrong in ways no script catches, which is why
+these are a floor rather than a substitute for reading.
 
 ## Safari and cookie transport
 
