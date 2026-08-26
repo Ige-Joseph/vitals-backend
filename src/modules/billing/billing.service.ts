@@ -3,6 +3,7 @@ import { AppError } from '@/lib/errors';
 import { env } from '@/config/env';
 import { createLogger } from '@/lib/logger';
 import { entitlementService } from './entitlement.service';
+import { checkoutService } from './checkout.service';
 import { providerRegistry } from './provider/provider.registry';
 import {
   TIER_ENTITLEMENTS,
@@ -89,15 +90,51 @@ export const billingService = {
     return { ...tier, prices: describePrices(tier.prices) };
   },
 
+  /**
+   * What the tiers are, for anyone at all.
+   *
+   * Deliberately account-free: no user is consulted, nothing here varies by
+   * caller, and so nothing here needs a caller. That is what lets it sit in
+   * front of `authenticate` and makes a shared link to the billing page work
+   * for someone who has never signed in.
+   *
+   * The account-specific half — which tier you are on, what you have been
+   * granted, what you are subscribed to — stays behind authentication in
+   * `getPlan`, which returns this as well so an existing client keeps seeing
+   * one payload.
+   */
+  publicPlans() {
+    return {
+      tiers: Object.values(TIER_DESCRIPTIONS).map(billingService.describeTier),
+      checkoutUrl: billingService.checkoutUrl(),
+      // Whether a purchase can actually be started right now. The page needs
+      // to know: an upgrade button that leads to "no provider configured" is
+      // worse than one that is honestly absent.
+      checkoutAvailable: providerRegistry.isConfigured,
+    };
+  },
+
   /** The caller's tier, what it grants, and what the other tier would. */
   async getPlan(userId: string) {
     // Entitlement comes from what is being paid for; planType is a projection.
-    const entitlement = await entitlementService.resolve(userId);
+    const [entitlement, pendingCheckout] = await Promise.all([
+      entitlementService.resolve(userId),
+      checkoutService.pending(userId),
+    ]);
     const tier = entitlement.tier;
 
     return {
       tier,
       subscription: entitlement.subscription,
+      /**
+       * A checkout started and not yet finished.
+       *
+       * An INCOMPLETE subscription grants nothing and so never appears in
+       * `subscription`, which left it invisible: someone who closed the tab
+       * mid-payment and came back had no way to be told anything was in
+       * flight. This is that missing signal.
+       */
+      pendingCheckout,
       entitlementSource: entitlement.source,
       description: billingService.describeTier(TIER_DESCRIPTIONS[tier]),
       // The account's actual columns, which may differ from the tier default
@@ -106,12 +143,9 @@ export const billingService = {
         managedPersonLimit: entitlement.managedPersonLimit,
         connectionLimit: entitlement.connectionLimit,
       },
-      tiers: Object.values(TIER_DESCRIPTIONS).map(billingService.describeTier),
-      checkoutUrl: billingService.checkoutUrl(),
-      // Whether a purchase can actually be started right now. The page needs
-      // to know: an upgrade button that leads to "no provider configured" is
-      // worse than one that is honestly absent.
-      checkoutAvailable: providerRegistry.isConfigured,
+      // The same tiers, prices and availability an anonymous caller gets, so
+      // one client reading one endpoint still sees one payload.
+      ...billingService.publicPlans(),
     };
   },
 

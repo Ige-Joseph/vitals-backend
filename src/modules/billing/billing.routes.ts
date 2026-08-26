@@ -10,6 +10,28 @@ import { prisma } from '@/lib/prisma';
 
 const router = Router();
 
+/**
+ * What the tiers are, and what they cost.
+ *
+ * Mounted deliberately *before* `authenticate`. Everything it returns is the
+ * same for every caller — the tier list, the prices, what each includes — so
+ * requiring an account to read it bought no privacy and broke every shared
+ * link to the billing page: a signed-out visitor got a 401 where they should
+ * have got an answer to "what is Premium".
+ *
+ * Nothing account-specific is served here. Which tier you are on, what you
+ * have been granted and what you are subscribed to all stay behind the
+ * middleware below, on `/plan`.
+ */
+router.get('/tiers', (_req, res, next) => {
+  try {
+    return ok(res, billingService.publicPlans(), 'Plans retrieved');
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Everything below this line requires an account.
 router.use(authenticate);
 
 const startCheckoutSchema = z.object({

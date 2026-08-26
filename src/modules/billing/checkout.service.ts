@@ -8,6 +8,19 @@ import { providerRegistry } from './provider/provider.registry';
 const log = createLogger('billing-checkout');
 
 /**
+ * How long a started-but-unfinished checkout stays worth mentioning.
+ *
+ * An INCOMPLETE row is created before the payer ever reaches the provider and
+ * is reused if they come back, so it outlives an abandoned attempt — nothing
+ * ever cleans it up, because it is also how a provider-created subscription
+ * gets matched back to us. Reporting it forever would leave "payment in
+ * progress" on screen for someone who changed their mind a month ago.
+ *
+ * Two hours is longer than any checkout takes and shorter than a grudge.
+ */
+const PENDING_CHECKOUT_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/**
  * Starting a purchase.
  *
  * The order of operations here is the whole design, and it is dictated by one
@@ -194,6 +207,46 @@ export const checkoutService = {
         'The payment provider could not start this checkout. Please try again.',
       );
     }
+  },
+
+  /**
+   * A checkout that was started and has not turned into a subscription.
+   *
+   * This is what an INCOMPLETE row means, and it is deliberately *not* the
+   * same claim as "a payment is being confirmed". We cannot tell those apart
+   * from here: a payer who completed payment and a payer who closed the tab at
+   * the provider leave behind exactly the same row, because the thing that
+   * distinguishes them is a webhook that has not arrived in either case. The
+   * caller is told what is true — a checkout was started, and when — and is
+   * left to phrase it honestly.
+   *
+   * Bounded by `PENDING_CHECKOUT_WINDOW_MS`, since nothing else ever clears
+   * these rows.
+   */
+  async pending(userId: string): Promise<{
+    subscriptionId: string;
+    priceId: string;
+    startedAt: Date;
+  } | null> {
+    const row = await prisma.subscription.findFirst({
+      where: {
+        userId,
+        status: 'INCOMPLETE',
+        // updatedAt rather than createdAt: the row is reused across attempts,
+        // so this is when the *current* attempt began.
+        updatedAt: { gt: new Date(Date.now() - PENDING_CHECKOUT_WINDOW_MS) },
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, priceId: true, updatedAt: true },
+    });
+
+    if (!row) return null;
+
+    return {
+      subscriptionId: row.id,
+      priceId: row.priceId,
+      startedAt: row.updatedAt,
+    };
   },
 
   /**
