@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import type { PrismaTx } from '@/types/prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma, type $Enums } from '@prisma/client';
 
 export type CareEventStatusFilter = 'PENDING' | 'DONE' | 'SKIPPED' | 'MISSED';
 
@@ -40,11 +40,14 @@ export const carePlanScope = (scope: PersonScope) => ({
     ...(scope.userId ? [{ personId: null, userId: scope.userId }] : []),
   ],
 });
-/// Hand-maintained, and so able to drift from the enum in the schema — it
-/// already had. Kept as a literal union rather than derived from Prisma
-/// because every caller here depends on the narrowing, but it must be updated
-/// whenever CarePlanType gains a value.
-export type CarePlanType = 'MEDICATION' | 'PREGNANCY' | 'VACCINATION' | 'APPOINTMENT';
+/// Derived from the schema rather than restated here.
+///
+/// This was a hand-written literal union and it had already drifted: adding
+/// APPOINTMENT to the Prisma enum left this one a value short, and the only
+/// thing that noticed was a compile error in an unrelated module. Deriving it
+/// keeps the narrowing every caller here depends on while making a future
+/// drift impossible — a new value in the schema is a new value here.
+export type CarePlanType = $Enums.CarePlanType;
 
 export interface CreateCarePlanInput {
   userId: string;
