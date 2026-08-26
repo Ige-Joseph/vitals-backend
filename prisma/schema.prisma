@@ -90,6 +90,7 @@ enum OutboxEventType {
   MEDICATION_FALLBACK_EMAIL
   PASSWORD_RESET
   WELCOME_EMAIL
+  PERSON_INVITATION
 }
 
 enum OutboxEventStatus {
@@ -172,6 +173,32 @@ enum AccessAction {
   TRANSFERRED
   ARCHIVED
   ERASED
+
+  /// Someone was offered their own record and could not take it, because the
+  /// record they already hold is not empty.
+  ///
+  /// Recorded rather than discarded so that a data subject asking "did anyone
+  /// try to take ownership of a record about me?" gets an answer. The *reason*
+  /// is deliberately not recorded: the ledger is readable by everyone with
+  /// read access to this Person, the inviter included, and why a claim was not
+  /// possible is a fact about the invitee's own health record, not about this
+  /// one.
+  CLAIM_REFUSED
+}
+
+/// An offer of access, addressed to an email rather than to an account.
+///
+/// PersonMembership cannot carry this: its `userId` is a required foreign key,
+/// so it can only describe a relationship to an account that already exists.
+/// The dominant case is the opposite one — somebody new to Vitals arriving
+/// from an invitation — so the offer has to outlive the absence of an account.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+
+  /// Withdrawn by the inviter before it was answered.
+  REVOKED
 }
 
 /// How a Person came to exist. Provenance, like createdByUserId — set once at
@@ -325,6 +352,7 @@ model User {
   // Person separation — phase A. No data is written to these yet.
   ownedPersons      Person[]
   personMemberships PersonMembership[]
+  invitationsSent   PersonInvitation[] @relation("PersonInvitationsSent")
   actedActivityLogs ActivityLog[]      @relation("ActivityActor")
 
   /// Provenance only: appointments this account booked. Access to any of them
@@ -479,6 +507,7 @@ model Person {
   medicationDrafts   MedicationDraft[]
   activityLogs       ActivityLog[]
   personAccessEvents PersonAccessEvent[]
+  invitations        PersonInvitation[]
 
   /// "Exactly one self-Person per account" as a database constraint rather
   /// than something a verification query notices afterwards. Postgres treats
@@ -582,6 +611,65 @@ model PersonAccessEvent {
   @@index([personId, occurredAt])
   @@index([subjectUserId, occurredAt])
   @@map("person_access_events")
+}
+
+/// An offer of access to a Person's record, addressed by email.
+///
+/// Two records describe access, and they answer different questions.
+/// PersonMembership is the *relationship*: it exists only between a Person and
+/// an account, and it is what authorization reads. This is the *offer*: it is
+/// addressed to an email that may not belong to an account yet, it carries the
+/// token that makes a link work, and it records what was offered.
+///
+/// Both exist for an invitee who already has an account — the membership is
+/// created INVITED at invite time, exactly as before this model existed, so
+/// nothing that reads memberships had to change.
+model PersonInvitation {
+  id       String @id @default(uuid())
+  personId String
+
+  /// Lower-cased at write time. The address the offer was sent to, which is
+  /// not necessarily an account: matching happens at acceptance, against the
+  /// accepting account's *verified* address.
+  email String
+
+  /// What ordinary acceptance grants. OWNER is not offerable — ownership moves
+  /// by claim or by handoff, both of which are their own paths.
+  role PersonRole @default(VIEWER)
+
+  /// Whether the inviter is asserting that this record is *about* the person
+  /// they are inviting, which is what makes the claim upgrade available at
+  /// acceptance.
+  ///
+  /// Set by the inviter and defaulting to false, because the invitee cannot be
+  /// the one to decide it: without this, anyone invited to look at a baby's
+  /// record could take ownership of it and lock the parent out. The invitee
+  /// still decides whether to *act* on it — this only makes the offer visible.
+  claimable Boolean @default(false)
+
+  /// SHA-256 of the token in the link, never the token itself — the same
+  /// treatment email verification and password reset tokens already get.
+  tokenHash String @unique
+
+  status    InvitationStatus @default(PENDING)
+  expiresAt DateTime
+
+  invitedByUserId String?
+
+  acceptedAt  DateTime?
+  respondedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  person    Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  invitedBy User?  @relation("PersonInvitationsSent", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  /// One live offer per address per record. Re-inviting supersedes rather than
+  /// accumulates, and a settled offer does not block a fresh one — which is
+  /// why the index is partial and lives in raw SQL, not here.
+  @@index([email, status])
+  @@index([personId, status])
+  @@map("person_invitations")
 }
 
 // ─────────────────────────────────────────────

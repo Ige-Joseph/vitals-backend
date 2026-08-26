@@ -27,6 +27,7 @@ import articleRoutes from '@/modules/articles/articles.routes';
 import aiMedicationDraftsRoutes from '@/modules/ai-medication-drafts/ai-medication-drafts.routes';
 import calendarRoutes from '@/modules/calendar/calendar.routes';
 import personRoutes from '@/modules/person/person.routes';
+import invitationRoutes from '@/modules/person/invitation.routes';
 import appointmentRoutes from '@/modules/appointments/appointments.routes';
 import reportRoutes from '@/modules/reports/reports.routes';
 import billingRoutes from '@/modules/billing/billing.routes';
@@ -142,6 +143,7 @@ export const createApp = () => {
   app.use(`${prefix}/ai/medication-drafts`, aiMedicationDraftsRoutes);
   app.use(`${prefix}/calendar`, calendarRoutes);
   app.use(`${prefix}/persons`, personRoutes);
+  app.use(`${prefix}/invitations`, invitationRoutes);
   app.use(`${prefix}/appointments`, appointmentRoutes);
   app.use(`${prefix}/reports`, reportRoutes);
   app.use(`${prefix}/billing`, billingRoutes);  

@@ -4,6 +4,7 @@ import { createLogger } from '@/lib/logger';
 import { personAccess } from './person.access';
 import { personRepository } from './person.repository';
 import { personService } from './person.service';
+import { personInvitationService } from './person.invitation.service';
 
 const log = createLogger('person-membership-service');
 
@@ -184,76 +185,30 @@ export const personMembershipService = {
   },
 
   /**
-   * Invite another account to a Person's record. Requires `manage`, so only an
-   * OWNER can do it — a caregiver cannot widen access on someone else's behalf.
+   * Invite another account to a Person's record.
    *
-   * The invitation grants nothing until accepted. Capacity is checked at
-   * acceptance, where the membership actually becomes ACTIVE.
+   * Kept for compatibility and now a thin wrapper: the implementation moved to
+   * `personInvitationService.invite`, which can also address an email with no
+   * account behind it. `requireExistingAccount` holds this route to its old
+   * contract — a 404 for an unknown address — and the return value is still
+   * the membership, so no existing client sees a change.
+   *
+   * Transitional. `POST /persons/:id/invitations` is the surface that carries
+   * the token, the expiry and the claimable flag; this one exists so the
+   * cutover does not have to be simultaneous.
    */
   async invite(
     userId: string,
     personId: string,
     input: { email: string; role: 'CAREGIVER' | 'VIEWER' },
   ) {
-    await personAccess.assertPersonAccess(userId, personId, 'manage');
-
-    const invitee = await prisma.user.findFirst({
-      where: { email: input.email, isActive: true, erasedAt: null },
-      select: { id: true },
+    const { membership } = await personInvitationService.invite(userId, personId, {
+      ...input,
+      claimable: false,
+      requireExistingAccount: true,
     });
 
-    if (!invitee) {
-      throw AppError.notFound('No active Vitals account with that email address');
-    }
-
-    if (invitee.id === userId) {
-      throw AppError.badRequest('You already have access to this record');
-    }
-
-    const existing = await prisma.personMembership.findUnique({
-      where: { personId_userId: { personId, userId: invitee.id } },
-    });
-
-    if (existing && existing.status === 'ACTIVE') {
-      throw AppError.conflict('That account already has access to this record');
-    }
-
-    return prisma.$transaction(async (tx) => {
-      const membership = await tx.personMembership.upsert({
-        where: { personId_userId: { personId, userId: invitee.id } },
-        create: {
-          personId,
-          userId: invitee.id,
-          role: input.role,
-          status: 'INVITED',
-          receivesNotifications: false,
-        },
-        // A previously revoked grant is re-issued as a fresh invitation rather
-        // than silently reactivated — the revocation stays in the ledger.
-        update: {
-          role: input.role,
-          status: 'INVITED',
-          invitedAt: new Date(),
-          acceptedAt: null,
-          revokedAt: null,
-        },
-      });
-
-      await personRepository.recordAccessEvent(
-        {
-          personId,
-          subjectUserId: invitee.id,
-          actorUserId: userId,
-          action: 'GRANTED',
-          role: input.role,
-          basis: 'owner-invite',
-        },
-        tx,
-      );
-
-      log.info('Access invited', { personId, invitee: invitee.id, role: input.role });
-      return membership;
-    });
+    return membership;
   },
 
   /**
@@ -285,6 +240,23 @@ export const personMembershipService = {
         where: { id: membership.id },
         data: { status: 'ACTIVE', acceptedAt: new Date() },
       });
+
+      // Settle the offer this membership came from, if it came from one. The
+      // membership is the relationship and the invitation is the offer; an
+      // answered offer that stays PENDING would keep appearing in the
+      // invitee's list and would block a later re-invitation on the partial
+      // unique index.
+      const invitee = await tx.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
+
+      if (invitee) {
+        await tx.personInvitation.updateMany({
+          where: { personId, email: invitee.email.trim().toLowerCase(), status: 'PENDING' },
+          data: { status: 'ACCEPTED', acceptedAt: new Date(), respondedAt: new Date() },
+        });
+      }
 
       await personRepository.recordAccessEvent(
         {

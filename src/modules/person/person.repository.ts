@@ -1,3 +1,5 @@
+import { $Enums } from '@prisma/client';
+
 import { prisma } from '@/lib/prisma';
 import { entitlementService } from '@/modules/billing/entitlement.service';
 import type { PrismaTx } from '@/types/prisma';
@@ -148,16 +150,11 @@ export const personRepository = {
       personId: string;
       subjectUserId?: string | null;
       actorUserId?: string | null;
-      action:
-        | 'GRANTED'
-        | 'ACCEPTED'
-        | 'CLAIMED'
-        | 'REVOKED'
-        | 'LEFT'
-        | 'TRANSFERRED'
-        | 'ARCHIVED'
-        | 'ERASED';
-      role?: 'OWNER' | 'CAREGIVER' | 'VIEWER' | null;
+      // Derived from the schema rather than restated here. A hand-written
+      // union silently stops matching the moment a value is added to the enum,
+      // and the compiler is the only thing that would have caught it.
+      action: $Enums.AccessAction;
+      role?: $Enums.PersonRole | null;
       basis: string;
       metadata?: Record<string, unknown>;
     },

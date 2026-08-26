@@ -5,6 +5,8 @@ import { authenticate } from '@/middleware/auth.middleware';
 import { AuthenticatedRequest } from '@/types/express';
 import { ok, created, validationError } from '@/lib/response';
 import { personMembershipService } from './person.membership.service';
+import { personInvitationService } from './person.invitation.service';
+import { personClaimService } from './person.claim.service';
 import { personHealthService } from './person.health.service';
 import { personRepository } from './person.repository';
 import { personService } from './person.service';
@@ -52,6 +54,34 @@ const demographicsSchema = z.object({
 
 const transferSchema = z.object({
   toUserId: z.string().min(1),
+});
+
+const invitationSchema = z.object({
+  email: z.string().email('Enter a valid email address'),
+  role: z.enum(['CAREGIVER', 'VIEWER']),
+  /**
+   * "This record is about the person I am inviting." Set by the inviter, and
+   * false unless they say otherwise.
+   *
+   * It has to be the inviter's assertion rather than something the invitee
+   * decides at acceptance. If any invitee could claim any unclaimed record
+   * they were shown, inviting an aunt to look at a baby's vaccination
+   * schedule would be enough for her to take ownership of it and revoke the
+   * parent — a lockout with no path back. The invitee still chooses whether
+   * to act on it; this only makes the offer exist.
+   */
+  claimable: z.boolean().optional(),
+});
+
+const regrantSchema = z.object({
+  grants: z
+    .array(
+      z.object({
+        userId: z.string().min(1),
+        role: z.enum(['CAREGIVER', 'VIEWER']),
+      }),
+    )
+    .max(20),
 });
 
 /** Everyone this account can see — the person switcher's source. */
@@ -248,6 +278,108 @@ router.get(
         String(req.params.personId),
       );
       return ok(res, history, 'Access history retrieved');
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── Invitations ────────────────────────────────────────────────────────
+// The inviter's side. The invitee's side is mounted at /invitations, because
+// answering an invitation happens before there is any access to check.
+
+/**
+ * Offer access by email, whether or not that address has an account.
+ *
+ * `POST /persons/:personId/members` remains and is unchanged — it still
+ * answers 404 for an address with no account. This route is the one that
+ * carries a token, an expiry and the claimable flag.
+ */
+router.post(
+  '/:personId/invitations',
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const parsed = invitationSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues[0].message);
+
+      const { invitation } = await personInvitationService.invite(
+        req.user!.sub,
+        String(req.params.personId),
+        parsed.data,
+      );
+
+      // Never the token. It goes to the address, and only to the address —
+      // returning it here would let an owner accept on the invitee's behalf.
+      return created(
+        res,
+        {
+          id: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          claimable: invitation.claimable,
+          status: invitation.status,
+          expiresAt: invitation.expiresAt,
+        },
+        'Invitation sent',
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/:personId/invitations',
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const invitations = await personInvitationService.listForPerson(
+        req.user!.sub,
+        String(req.params.personId),
+      );
+      return ok(res, invitations, 'Invitations retrieved');
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/** Withdraw an offer that has not been answered. */
+router.delete(
+  '/:personId/invitations/:invitationId',
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const result = await personInvitationService.revokeInvitation(
+        req.user!.sub,
+        String(req.params.personId),
+        String(req.params.invitationId),
+      );
+      return ok(res, result, 'Invitation withdrawn');
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * The second half of a claim: keep the people who were managing the record.
+ *
+ * A claim revokes them, because once the record's subject owns it anyone
+ * else's access is the subject's decision. This is that decision — one call,
+ * made right after the claim, and bounded to the accounts the claim removed.
+ */
+router.post(
+  '/:personId/claim-regrant',
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const parsed = regrantSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues[0].message);
+
+      const result = await personClaimService.regrantAfterClaim(
+        req.user!.sub,
+        String(req.params.personId),
+        parsed.data.grants,
+      );
+      return ok(res, result, 'Access restored');
     } catch (err) {
       next(err);
     }
