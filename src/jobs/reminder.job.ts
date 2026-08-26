@@ -3,6 +3,7 @@ import { redisConnection } from '@/lib/redis';
 import { reminderEngine } from '@/modules/care/reminder.engine';
 import { outboxService } from '@/modules/outbox/outbox.service';
 import { reconciliationService } from '@/modules/billing/reconciliation.service';
+import { appointmentsService } from '@/modules/appointments/appointments.service';
 import { createLogger } from '@/lib/logger';
 import { env } from '@/config/env';
 
@@ -12,6 +13,7 @@ const REMINDER_QUEUE = 'reminder-scheduler';
 const REMINDER_JOB = 'PROCESS_DUE_REMINDERS';
 const RECONCILE_JOB = 'billing-reconcile';
 const OUTBOX_JOB = 'PROCESS_OUTBOX';
+const APPOINTMENT_SWEEP_JOB = 'SWEEP_MISSED_APPOINTMENTS';
 
 // Dedicated queue for the scheduler — separate from the notifications queue
 export const reminderSchedulerQueue = new Queue(REMINDER_QUEUE, {
@@ -39,6 +41,11 @@ export const reminderSchedulerWorker = new Worker(
     if (job.name === RECONCILE_JOB) {
       log.debug('Billing reconciliation tick');
       await reconciliationService.run();
+    }
+
+    if (job.name === APPOINTMENT_SWEEP_JOB) {
+      log.debug('Appointment sweep tick');
+      await appointmentsService.sweepMissed();
     }
   },
   { connection: redisConnection, concurrency: 1 },
@@ -71,6 +78,19 @@ export const startScheduledJobs = async (): Promise<void> => {
     },
   );
 
+  // Missed appointments — quarter-hourly by default. Nothing else moves an
+  // appointment out of SCHEDULED once its time has passed, so without this a
+  // visit that never happened stays "upcoming" for ever. The claim is a single
+  // conditional UPDATE, so running this on more than one worker is safe.
+  await reminderSchedulerQueue.add(
+    APPOINTMENT_SWEEP_JOB,
+    {},
+    {
+      repeat: { every: env.APPOINTMENT_SWEEP_INTERVAL_MS },
+      jobId: 'appointment-sweep-tick',
+    },
+  );
+
   // Outbox poller — every 30 seconds
   await reminderSchedulerQueue.add(
     OUTBOX_JOB,
@@ -82,7 +102,7 @@ export const startScheduledJobs = async (): Promise<void> => {
   );
 
   log.info('Scheduled jobs registered', {
-    jobs: ['reminder-engine (60s)', 'outbox-poller (30s)'],
+    jobs: ['reminder-engine (60s)', 'outbox-poller (30s)', 'appointment-sweep'],
   });
 };
 

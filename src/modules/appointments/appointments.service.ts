@@ -1,10 +1,10 @@
 import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { createLogger } from '@/lib/logger';
+import { env } from '@/config/env';
 import type { PrismaTx } from '@/types/prisma';
 import { personAccess } from '@/modules/person/person.access';
 import { careRepository } from '@/modules/care/care.repository';
-import { careService } from '@/modules/care/care.service';
 import { calendarService } from '@/modules/calendar/calendar.service';
 import { appointmentsRepository } from './appointments.repository';
 import type {
@@ -418,6 +418,44 @@ export const appointmentsService = {
     await syncCalendar('cleanup', userId, existing.carePlanId);
 
     return appointmentsRepository.findForPerson(appointmentId, personId);
+  },
+
+  /**
+   * Mark appointments nobody attended.
+   *
+   * Without this an appointment sits SCHEDULED for ever once its time has
+   * passed, and every list of upcoming care keeps offering a visit that
+   * happened last month — or did not.
+   *
+   * No access check, and deliberately so: this has no caller to authorize. It
+   * runs on the worker over every Person in the system, which is exactly why
+   * it does not take a userId — there is no account whose permissions would
+   * mean anything here. What protects it instead is that it can only ever move
+   * a row from "expected" to "missed", and touches nothing else.
+   *
+   * The claim and the transition are one statement, so running this on two
+   * workers at once is safe: whichever gets there first takes the row, and the
+   * other's filter no longer matches it.
+   */
+  async sweepMissed(
+    options: { graceMs?: number; limit?: number } = {},
+  ): Promise<{ missed: number }> {
+    const graceMs = options.graceMs ?? env.APPOINTMENT_MISSED_GRACE_MS;
+    const limit = options.limit ?? 200;
+
+    const claimed = await appointmentsRepository.claimMissed(graceMs, limit);
+    if (claimed.length === 0) return { missed: 0 };
+
+    // Only the rows this worker actually took. Anything another worker claimed
+    // is absent from `claimed` and is being settled by that worker.
+    await appointmentsRepository.settlePlans(
+      claimed.map((row) => row.carePlanId),
+      'MISSED',
+    );
+
+    log.info('Appointments marked missed', { count: claimed.length });
+
+    return { missed: claimed.length };
   },
 
   /** Mark one as having happened. */

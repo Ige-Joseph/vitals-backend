@@ -83,6 +83,18 @@ const envSchema = z
     ADHERENCE_CHECK_DELAY_MS: z.coerce.number().default(1800000),
     MISSED_WINDOW_MS: z.coerce.number().default(7200000),
 
+    /**
+     * How long after an appointment has finished before it counts as missed.
+     *
+     * Measured from the end — `startsAt` plus its own duration — not from the
+     * start, because an appointment in progress has not been missed and a long
+     * one would otherwise be marked missed while the patient was still in the
+     * room. Two hours past the end, by default.
+     */
+    APPOINTMENT_MISSED_GRACE_MS: z.coerce.number().default(7200000),
+    /** How often the sweep runs. */
+    APPOINTMENT_SWEEP_INTERVAL_MS: z.coerce.number().default(900000),
+
     // Token expiry
     EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS: z.coerce.number().default(24),
     PASSWORD_RESET_TOKEN_EXPIRES_HOURS: z.coerce.number().default(1),

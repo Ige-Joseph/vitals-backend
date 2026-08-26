@@ -425,6 +425,177 @@ describe('calendar sync never takes an appointment down with it', () => {
   });
 });
 
+describe('appointments nobody attended stop being upcoming', () => {
+  /**
+   * Reaching the past honestly is impossible — the API refuses to book one
+   * there, which is the point. So the row is aged with SQL, exactly as the
+   * billing suite ages a stale checkout: what is under test is the sweep's
+   * own query, and it has to be the query that will run in production.
+   */
+  const setStartsAt = async (appointmentId: string, when: Date) => {
+    await prisma.$executeRaw`
+      UPDATE appointments SET "startsAt" = ${when} WHERE id = ${appointmentId}
+    `;
+    await prisma.$executeRaw`
+      UPDATE care_events SET "scheduledFor" = ${when}
+       WHERE "carePlanId" = (SELECT "carePlanId" FROM appointments WHERE id = ${appointmentId})
+    `;
+  };
+
+  const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000);
+
+  it('marks one whose time has passed, and settles what it left behind', async () => {
+    const user = await createUser();
+    const appointment = await appointmentsService.create(user.id, {
+      ...validBooking(),
+      startsAt: inDays(1),
+    } as never);
+
+    // Well past the end plus the grace window.
+    await setStartsAt(appointment.id, hoursAgo(12));
+
+    const result = await appointmentsService.sweepMissed();
+    expect(result.missed).toBe(1);
+
+    const after = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointment.id },
+    });
+    expect(after.status).toBe('MISSED');
+
+    // Nothing left that would still fire or still look pending.
+    const livePending = await prisma.reminder.count({
+      where: { careEvent: { carePlanId: appointment.carePlanId }, status: 'PENDING' },
+    });
+    expect(livePending).toBe(0);
+
+    const events = await prisma.careEvent.findMany({
+      where: { carePlanId: appointment.carePlanId },
+    });
+    expect(events.every((e) => e.status === 'MISSED')).toBe(true);
+
+    const plan = await prisma.carePlan.findUniqueOrThrow({
+      where: { id: appointment.carePlanId },
+    });
+    expect(plan.status).toBe('COMPLETED');
+  });
+
+  it('leaves alone anything still ahead, in progress, or already resolved', async () => {
+    const user = await createUser();
+
+    const future = await appointmentsService.create(user.id, {
+      ...validBooking({ title: 'Still to come' }),
+      startsAt: inDays(3),
+    } as never);
+
+    // Started 15 minutes ago and runs for 45: still in the room, not missed.
+    const inProgress = await appointmentsService.create(user.id, {
+      ...validBooking({ title: 'Happening now' }),
+      startsAt: inDays(1),
+    } as never);
+    await setStartsAt(inProgress.id, new Date(Date.now() - 15 * 60_000));
+
+    // Over, but inside the grace window — two hours by default.
+    const justFinished = await appointmentsService.create(user.id, {
+      ...validBooking({ title: 'Only just over' }),
+      startsAt: inDays(1),
+    } as never);
+    await setStartsAt(justFinished.id, hoursAgo(1));
+
+    // Long past, but already cancelled. A cancelled appointment was not
+    // missed — somebody said so at the time.
+    const cancelled = await appointmentsService.create(user.id, {
+      ...validBooking({ title: 'Called off' }),
+      startsAt: inDays(1),
+    } as never);
+    await appointmentsService.cancel(user.id, cancelled.id);
+    await setStartsAt(cancelled.id, hoursAgo(48));
+
+    const result = await appointmentsService.sweepMissed();
+    expect(result.missed).toBe(0);
+
+    const statuses = await prisma.appointment.findMany({
+      where: { id: { in: [future.id, inProgress.id, justFinished.id, cancelled.id] } },
+      select: { id: true, status: true },
+    });
+    const byId = Object.fromEntries(statuses.map((s) => [s.id, s.status]));
+
+    expect(byId[future.id]).toBe('SCHEDULED');
+    expect(byId[inProgress.id]).toBe('SCHEDULED');
+    expect(byId[justFinished.id]).toBe('SCHEDULED');
+    expect(byId[cancelled.id]).toBe('CANCELLED');
+  });
+
+  it('sweeps a CONFIRMED appointment too', async () => {
+    const user = await createUser();
+    const appointment = await appointmentsService.create(user.id, {
+      ...validBooking(),
+      startsAt: inDays(1),
+    } as never);
+
+    await prisma.appointment.update({
+      where: { id: appointment.id },
+      data: { status: 'CONFIRMED' },
+    });
+    await setStartsAt(appointment.id, hoursAgo(12));
+
+    expect((await appointmentsService.sweepMissed()).missed).toBe(1);
+    expect(
+      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointment.id } })).status,
+    ).toBe('MISSED');
+  });
+
+  /**
+   * The claim, under contention.
+   *
+   * Two sweeps at once is the real deployment: the scheduler runs on every
+   * worker process. If the claim were a read followed by a write, both would
+   * see the same SCHEDULED rows and both would count them.
+   */
+  it('never lets two concurrent sweeps claim the same appointment', async () => {
+    const user = await createUser();
+
+    const ids: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const appointment = await appointmentsService.create(user.id, {
+        ...validBooking({ title: `Overdue ${i}` }),
+        startsAt: inDays(1),
+      } as never);
+      await setStartsAt(appointment.id, hoursAgo(12 + i));
+      ids.push(appointment.id);
+    }
+
+    const [first, second] = await Promise.all([
+      appointmentsService.sweepMissed(),
+      appointmentsService.sweepMissed(),
+    ]);
+
+    // Between them they took each appointment exactly once — never twice, and
+    // never fewer than all of them.
+    expect(first.missed + second.missed).toBe(6);
+
+    const missed = await prisma.appointment.count({
+      where: { id: { in: ids }, status: 'MISSED' },
+    });
+    expect(missed).toBe(6);
+  });
+
+  it('respects the limit so one tick cannot run away with the database', async () => {
+    const user = await createUser();
+
+    for (let i = 0; i < 4; i += 1) {
+      const appointment = await appointmentsService.create(user.id, {
+        ...validBooking({ title: `Backlog ${i}` }),
+        startsAt: inDays(1),
+      } as never);
+      await setStartsAt(appointment.id, hoursAgo(20 + i));
+    }
+
+    expect((await appointmentsService.sweepMissed({ limit: 2 })).missed).toBe(2);
+    expect((await appointmentsService.sweepMissed({ limit: 2 })).missed).toBe(2);
+    expect((await appointmentsService.sweepMissed({ limit: 2 })).missed).toBe(0);
+  });
+});
+
 describe('every appointment has a Person, always', () => {
   it('leaves no row with a null or orphaned personId', async () => {
     const patient = await createUser();

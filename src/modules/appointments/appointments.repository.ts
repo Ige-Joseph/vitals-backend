@@ -116,16 +116,89 @@ export const appointmentsRepository = {
     });
   },
 
+  /**
+   * Claim appointments whose time has passed, and mark them missed.
+   *
+   * The same conditional-claim shape `claimReminder` uses, at set level: the
+   * status is both the filter and what the statement writes, so the claim and
+   * the transition are one atomic UPDATE. A second worker running the same
+   * sweep concurrently matches nothing — the rows it would have taken are no
+   * longer SCHEDULED or CONFIRMED by the time its own WHERE is evaluated — and
+   * RETURNING tells this worker exactly which rows it, and only it, took.
+   *
+   * Raw SQL because the cutoff is per row: an appointment is over at
+   * `startsAt + durationMinutes`, and Prisma's query builder cannot express a
+   * comparison against a column-derived interval. Doing it in application code
+   * instead would mean reading candidates and writing them back, which is the
+   * race this is written to avoid.
+   *
+   * CONFIRMED is swept alongside SCHEDULED. An appointment someone confirmed
+   * they would attend and then did not is missed in exactly the same sense;
+   * leaving it out would leave those rows stuck for ever, which is the defect
+   * this sweep exists to fix.
+   */
+  claimMissed(graceMs: number, limit: number, tx?: PrismaTx) {
+    const client = tx ?? prisma;
+    const graceSeconds = Math.round(graceMs / 1000);
+
+    return client.$queryRaw<Array<{ id: string; carePlanId: string }>>`
+      UPDATE appointments
+         SET status = 'MISSED', "updatedAt" = now()
+       WHERE id IN (
+         SELECT id
+           FROM appointments
+          WHERE status IN ('SCHEDULED', 'CONFIRMED')
+            AND "startsAt" + make_interval(mins => "durationMinutes")
+                < now() - make_interval(secs => ${graceSeconds}::int)
+          ORDER BY "startsAt" ASC
+          LIMIT ${limit}::int
+          FOR UPDATE SKIP LOCKED
+       )
+      RETURNING id, "carePlanId"
+    `;
+  },
+
   /** Care events for a plan that have not yet been acted on. */
   markPendingEvents(
     carePlanId: string,
-    status: 'SKIPPED' | 'DONE',
+    status: 'SKIPPED' | 'DONE' | 'MISSED',
     tx?: PrismaTx,
   ) {
     const client = tx ?? prisma;
     return client.careEvent.updateMany({
       where: { carePlanId, status: 'PENDING' },
       data: { status },
+    });
+  },
+
+  /**
+   * The same three tidy-ups the sweep needs, across many plans at once.
+   *
+   * Separate from the single-plan versions rather than a loop over them: a
+   * sweep handling a hundred appointments should issue three statements, not
+   * three hundred.
+   */
+  async settlePlans(
+    carePlanIds: string[],
+    eventStatus: 'MISSED' | 'SKIPPED' | 'DONE',
+    tx?: PrismaTx,
+  ) {
+    if (carePlanIds.length === 0) return;
+    const client = tx ?? prisma;
+
+    await client.reminder.updateMany({
+      where: { careEvent: { carePlanId: { in: carePlanIds } }, status: 'PENDING' },
+      data: { status: 'CANCELLED' },
+    });
+
+    await client.careEvent.updateMany({
+      where: { carePlanId: { in: carePlanIds }, status: 'PENDING' },
+      data: { status: eventStatus },
+    });
+
+    await client.carePlan.updateMany({
+      where: { id: { in: carePlanIds } },
+      data: { status: 'COMPLETED' },
     });
   },
 };
