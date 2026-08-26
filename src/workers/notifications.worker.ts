@@ -6,6 +6,7 @@ import {
   SendVerificationEmailPayload,
   SendPasswordResetEmailPayload,
   SendMedicationFallbackEmailPayload,
+  SendPersonInvitationEmailPayload,
 } from '@/queues/queue.registry';
 import { emailService } from '@/providers/email/email.service';
 import { outboxRepository } from '@/modules/outbox/outbox.repository';
@@ -95,6 +96,29 @@ export const notificationsWorker = new Worker(
           jobId: job.id,
           userId: payload.userId,
         });
+        break;
+      }
+
+      case JOB_NAMES.SEND_PERSON_INVITATION_EMAIL: {
+        const payload = job.data as SendPersonInvitationEmailPayload;
+
+        // The address travels in the payload and is not re-resolved. Unlike a
+        // reminder, an invitation is addressed to the *address* rather than to
+        // whoever holds an account: there may be no account behind it at all,
+        // and the token in the link is scoped to this address. Re-resolving
+        // would either find nobody or, worse, find whoever has since taken the
+        // address over.
+        await emailService.sendPersonInvitationEmail({
+          to: payload.email,
+          acceptUrl: payload.acceptUrl,
+          recordName: payload.personDisplayName,
+          inviterName: payload.inviterName,
+          hasAccount: payload.hasAccount,
+        });
+
+        await outboxRepository.markProcessed(payload.outboxEventId);
+
+        log.info('Person invitation email sent', { jobId: job.id });
         break;
       }
 

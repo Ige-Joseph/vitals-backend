@@ -31,6 +31,7 @@ export const JOB_NAMES = {
   SEND_PUSH_REMINDER: 'SEND_PUSH_REMINDER',
   SEND_MEDICATION_FALLBACK_EMAIL: 'SEND_MEDICATION_FALLBACK_EMAIL',
   SEND_MOOD_PROMPT_PUSH: 'SEND_MOOD_PROMPT_PUSH',
+  SEND_PERSON_INVITATION_EMAIL: 'SEND_PERSON_INVITATION_EMAIL',
 
   // Adherence queue
   CHECK_MEDICATION_ADHERENCE: 'CHECK_MEDICATION_ADHERENCE',
@@ -52,6 +53,21 @@ export interface SendVerificationEmailPayload {
   userId: string;
   email: string;
   rawToken: string;
+}
+
+/**
+ * Addressed to an email, not to a user id. The recipient may have no account —
+ * that is the case invitations exist for — so the address travels in the
+ * payload rather than being looked up from a `userId` that would be null.
+ */
+export interface SendPersonInvitationEmailPayload {
+  outboxEventId: string;
+  email: string;
+  rawToken: string;
+  personDisplayName: string;
+  inviterName: string;
+  hasAccount: boolean;
+  acceptUrl: string;
 }
 
 export interface SendPasswordResetEmailPayload {

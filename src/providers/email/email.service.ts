@@ -38,6 +38,27 @@ export const emailService = {
     log.info('Password reset email sent', { to: options.to });
   },
 
+  async sendPersonInvitationEmail(options: {
+    to: string;
+    acceptUrl: string;
+    recordName: string;
+    inviterName: string;
+    hasAccount: boolean;
+  }): Promise<void> {
+    await brevoAdapter.send({
+      to: options.to,
+      subject: `${options.inviterName} invited you to a health record on Vitals`,
+      html: emailTemplates.personInvitation({
+        acceptUrl: options.acceptUrl,
+        recordName: options.recordName,
+        inviterName: options.inviterName,
+        hasAccount: options.hasAccount,
+      }),
+    });
+
+    log.info('Person invitation email sent', { to: options.to });
+  },
+
   async sendMedicationFallbackEmail(options: {
     to: string;
     medicationName: string;
