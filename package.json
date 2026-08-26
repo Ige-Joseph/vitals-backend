@@ -29,6 +29,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "verify:openapi": "node scripts/verify-openapi.js",
+    "verify:docs": "node scripts/verify-docs.js",
     "db:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
     "db:reset": "prisma migrate reset --force && npm run db:seed"
   },

@@ -64,6 +64,14 @@ jobs:
       - name: Verify OpenAPI spec
         run: npm run verify:openapi
 
+      # Documentation rots silently: nothing fails when a README names a port
+      # that moved or a script that was renamed, and the only signal is the next
+      # person losing an afternoon. This checks the mechanically checkable
+      # claims — links, connection details, env vars, npm scripts, source paths.
+      # Static, like the check above it.
+      - name: Verify documentation
+        run: npm run verify:docs
+
       - name: Test
         run: npm test -- --ci --maxWorkers=2
 
