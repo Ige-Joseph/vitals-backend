@@ -179,6 +179,22 @@ describe('a real checkout produces a visible pending state', () => {
   });
 });
 
+/**
+ * These two run in order and mean nothing apart — which is the point. The
+ * property under test is that state does not survive from the first into the
+ * second, and the only way to see that is to put something in and look again.
+ */
+describe('a registered provider does not leak into the next test', () => {
+  it('is configured while a test has registered one', () => {
+    providerRegistry.register(createPaystackAdapter(TEST_KEY));
+    expect(providerRegistry.isConfigured).toBe(true);
+  });
+
+  it('is back to nothing configured by the next', () => {
+    expect(providerRegistry.isConfigured).toBe(false);
+  });
+});
+
 describe('what Premium is can be read without an account', () => {
   it('answers a caller carrying no credentials at all', async () => {
     const res = await request(app).get('/api/v1/billing/tiers');
@@ -200,7 +216,9 @@ describe('what Premium is can be read without an account', () => {
       currency: expect.any(String),
       perMonthMinor: expect.any(Number),
     });
-    expect(typeof res.body.data.checkoutAvailable).toBe('boolean');
+    // Deterministically false now that the registry is reset between tests:
+    // nothing in this test configured a provider.
+    expect(res.body.data.checkoutAvailable).toBe(false);
   });
 
   it('tells an anonymous caller nothing about any account', async () => {
@@ -243,7 +261,9 @@ describe('what Premium is can be read without an account', () => {
     expect(res.body.data.entitlements).toBeDefined();
     expect(res.body.data.tiers.length).toBeGreaterThan(0);
     expect(res.body.data.checkoutUrl).toBeTruthy();
-    expect(typeof res.body.data.checkoutAvailable).toBe('boolean');
+    // Deterministically false now that the registry is reset between tests:
+    // nothing in this test configured a provider.
+    expect(res.body.data.checkoutAvailable).toBe(false);
     // …plus the signal that was missing.
     expect(res.body.data.pendingCheckout.subscriptionId).toBe(subscription.id);
   });

@@ -25,6 +25,24 @@ export const providerRegistry = {
     log.info('Payment provider registered', { provider: adapter.name });
   },
 
+  /**
+   * Forget every adapter.
+   *
+   * A test seam, and only that. Nothing in the running application unregisters
+   * a provider — an adapter is registered once at start-up and lives as long
+   * as the process.
+   *
+   * It exists because this map is module state, and the database harness
+   * truncates tables rather than reloading modules: an adapter registered by
+   * one test would otherwise still be there for the next one, pointing at a
+   * stub server that has since been closed. That leaks in the direction that
+   * hides bugs — `isConfigured` reads true when the test doing the reading
+   * configured nothing.
+   */
+  reset(): void {
+    adapters.clear();
+  },
+
   /** The adapter, or undefined. Callers that can cope with absence use this. */
   find(provider: PaymentProvider): PaymentProviderAdapter | undefined {
     return adapters.get(provider);

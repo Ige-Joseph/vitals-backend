@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { providerRegistry } from '@/modules/billing/provider/provider.registry';
 
 /**
  * Jest `setupFilesAfterEnv` — per-test isolation.
@@ -57,6 +58,22 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await truncateAll();
+});
+
+/**
+ * Undo the other kind of state a test can leave behind.
+ *
+ * Truncation only reaches the database. The payment provider registry is a
+ * module-level map, so an adapter registered by one test survives into the
+ * next one — still registered, pointing at a stub server that has since been
+ * closed. Clearing it here keeps "no provider is configured" the honest
+ * starting point it is in a fresh process.
+ *
+ * Defined after the truncating hook and so, being an `afterEach`, running
+ * after a suite's own — a test closing its stub still gets to do that first.
+ */
+afterEach(() => {
+  providerRegistry.reset();
 });
 
 afterAll(async () => {
