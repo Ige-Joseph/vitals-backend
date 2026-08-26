@@ -39,6 +39,13 @@ enum CarePlanType {
   MEDICATION
   PREGNANCY
   VACCINATION
+
+  /// A single appointment. The plan row is the care engine's root — it is what
+  /// CareEvent, Reminder and calendar sync all hang from — while the structured
+  /// detail lives on Appointment. Unlike the other three this is a moment
+  /// rather than a course, so an appointment plan only ever moves
+  /// ACTIVE -> COMPLETED; PAUSED is meaningless for it and never written.
+  APPOINTMENT
 }
 
 enum CarePlanStatus {
@@ -320,6 +327,10 @@ model User {
   personMemberships PersonMembership[]
   actedActivityLogs ActivityLog[]      @relation("ActivityActor")
 
+  /// Provenance only: appointments this account booked. Access to any of them
+  /// comes from a membership on the Person, never from this relation.
+  bookedAppointments Appointment[] @relation("AppointmentCreatedBy")
+
   @@map("users")
 }
 
@@ -457,6 +468,7 @@ model Person {
   healthProfile PersonHealthProfile?
 
   carePlans          CarePlan[]
+  appointments       Appointment[]
   symptomLogs        SymptomLog[]
   moodLogs           MoodLog[]
   drugDetections     DrugDetection[]
@@ -631,7 +643,7 @@ model Subscription {
   providerSubscriptionId String? @unique
   /// The provider's customer handle. Kept separately so a refund arriving
   /// after erasure can still be attributed without a user row.
-  providerCustomerRef String?
+  providerCustomerRef    String?
 
   /// Provider-specific handles this subscription cannot be operated without.
   ///
@@ -696,10 +708,10 @@ model PaymentTransaction {
   userId         String?
   subscriptionId String?
 
-  provider PaymentProvider
+  provider            PaymentProvider
   /// The provider's id for this movement. Unique, so replaying a webhook
   /// cannot record the same payment twice.
-  providerReference   String  @unique
+  providerReference   String          @unique
   providerCustomerRef String?
 
   type   PaymentTransactionType
@@ -781,6 +793,7 @@ model CarePlan {
   careEvents       CareEvent[]
   medication       Medication?
   pregnancyProfile PregnancyProfile?
+  appointment      Appointment?
 
   @@index([userId, status])
   @@index([userId, type, status])
@@ -946,6 +959,83 @@ model MedicationDraft {
   @@index([expiresAt])
   @@index([personId])
   @@map("medication_drafts")
+}
+
+// ─────────────────────────────────────────────
+// Appointments
+// ─────────────────────────────────────────────
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  /// Called off before it happened. Kept, never deleted — that it was going to
+  /// happen is itself part of the record.
+  CANCELLED
+  /// The time passed and nobody said otherwise.
+  MISSED
+}
+
+/// The structured half of an appointment.
+///
+/// One row per CarePlan of type APPOINTMENT, exactly as Medication and
+/// PregnancyProfile hang off their own plans. Everything here is a real column
+/// on purpose: CarePlan.metadata is already carrying frequency, customTimes,
+/// aiDraftId and babyName as untyped JSON, and nothing about an appointment is
+/// going in there to keep it company.
+///
+/// personId is not nullable and is not a "phase A" column. Appointments are
+/// person-native from the first row: the clinical subject is the Person, the
+/// account is only ever the caller, and every read and write resolves through
+/// personAccess before it gets here.
+model Appointment {
+  id         String @id @default(uuid())
+  carePlanId String @unique
+  personId   String
+
+  /// When it starts, and for how long. Duration rather than an end timestamp
+  /// because it is what a caller actually knows, and an end that disagreed
+  /// with its start would be a second source of truth for the same fact.
+  startsAt        DateTime
+  durationMinutes Int      @default(30)
+
+  /// Who and where. All optional: an appointment worth remembering is often
+  /// booked before any of this is settled.
+  clinician String?
+  specialty String?
+  location  String?
+  reason    String?
+  notes     String?
+
+  status AppointmentStatus @default(SCHEDULED)
+
+  /// How far ahead to remind, in minutes before `startsAt`. An Int[] rather
+  /// than JSON so it stays queryable and typed; a lead time already in the
+  /// past simply produces no reminder.
+  reminderLeadMinutes Int[] @default([1440, 60])
+
+  /// Provenance only, never access — a caregiver who booked this has no claim
+  /// on it beyond their membership. Nullable and SetNull so erasing the
+  /// booker's account leaves the dependent's appointment standing.
+  createdByUserId String?
+
+  cancelledAt        DateTime?
+  cancellationReason String?
+  completedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  carePlan  CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade. A Person's appointments are health records and
+  /// must not disappear as a side effect of removing anything else.
+  person    Person   @relation(fields: [personId], references: [id], onDelete: Restrict)
+  createdBy User?    @relation("AppointmentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([personId, startsAt])
+  @@index([personId, status, startsAt])
+  @@index([status, startsAt])
+  @@map("appointments")
 }
 
 // ─────────────────────────────────────────────

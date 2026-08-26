@@ -40,7 +40,11 @@ export const carePlanScope = (scope: PersonScope) => ({
     ...(scope.userId ? [{ personId: null, userId: scope.userId }] : []),
   ],
 });
-export type CarePlanType = 'MEDICATION' | 'PREGNANCY' | 'VACCINATION';
+/// Hand-maintained, and so able to drift from the enum in the schema — it
+/// already had. Kept as a literal union rather than derived from Prisma
+/// because every caller here depends on the narrowing, but it must be updated
+/// whenever CarePlanType gains a value.
+export type CarePlanType = 'MEDICATION' | 'PREGNANCY' | 'VACCINATION' | 'APPOINTMENT';
 
 export interface CreateCarePlanInput {
   userId: string;

@@ -27,6 +27,7 @@ import articleRoutes from '@/modules/articles/articles.routes';
 import aiMedicationDraftsRoutes from '@/modules/ai-medication-drafts/ai-medication-drafts.routes';
 import calendarRoutes from '@/modules/calendar/calendar.routes';
 import personRoutes from '@/modules/person/person.routes';
+import appointmentRoutes from '@/modules/appointments/appointments.routes';
 import billingRoutes from '@/modules/billing/billing.routes';
 import billingWebhookRoutes from '@/modules/billing/webhook.routes';
 
@@ -140,6 +141,7 @@ export const createApp = () => {
   app.use(`${prefix}/ai/medication-drafts`, aiMedicationDraftsRoutes);
   app.use(`${prefix}/calendar`, calendarRoutes);
   app.use(`${prefix}/persons`, personRoutes);
+  app.use(`${prefix}/appointments`, appointmentRoutes);
   app.use(`${prefix}/billing`, billingRoutes);  
   // ─────────────────────────────────────────────
   // Error handling — must be last
