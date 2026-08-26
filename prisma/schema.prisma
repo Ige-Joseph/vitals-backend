@@ -331,6 +331,9 @@ model User {
   /// comes from a membership on the Person, never from this relation.
   bookedAppointments Appointment[] @relation("AppointmentCreatedBy")
 
+  /// Provenance only: reports this account generated.
+  reportGenerations ReportGeneration[] @relation("ReportGeneratedBy")
+
   @@map("users")
 }
 
@@ -469,6 +472,7 @@ model Person {
 
   carePlans          CarePlan[]
   appointments       Appointment[]
+  reportGenerations  ReportGeneration[]
   symptomLogs        SymptomLog[]
   moodLogs           MoodLog[]
   drugDetections     DrugDetection[]
@@ -959,6 +963,58 @@ model MedicationDraft {
   @@index([expiresAt])
   @@index([personId])
   @@map("medication_drafts")
+}
+
+// ─────────────────────────────────────────────
+// Reports
+// ─────────────────────────────────────────────
+
+enum ReportKind {
+  /// Everything a Person has recorded over a stated period, as one document.
+  HEALTH_SUMMARY
+}
+
+/// That a report was generated — and deliberately nothing else.
+///
+/// There is no file column here, and that is the design rather than an
+/// omission. The document is rendered and streamed in the request, and no copy
+/// is kept: a stored PDF containing one Person's entire health record is a
+/// standing liability, duplicated outside the tables that own the data and
+/// outside every access check that guards them. Regenerating is cheap; a
+/// forgotten export sitting in object storage is not.
+///
+/// What is kept is the fact of it. Who asked, whose record, when, and over
+/// what period — enough to answer "who has taken a copy of this person's
+/// history out of the system", which is a question the NDPA can be expected to
+/// ask, and which nothing else in the schema could answer.
+///
+/// This is not `PersonAccessEvent`. That records access being granted or
+/// revoked; this records a document being produced. Nor is it `ActivityLog`,
+/// which is a user-facing feed.
+model ReportGeneration {
+  id       String @id @default(uuid())
+  personId String
+
+  /// The account that asked for it. Nullable and SetNull so erasing that
+  /// account leaves the record of the generation standing — the Person whose
+  /// data left the system is the one with an interest in it, not the account
+  /// that pressed the button.
+  generatedByUserId String?
+
+  kind ReportKind @default(HEALTH_SUMMARY)
+
+  /// The window the document covered, exactly as the reader was shown it.
+  periodStart DateTime
+  periodEnd   DateTime
+
+  generatedAt DateTime @default(now())
+
+  person      Person @relation(fields: [personId], references: [id], onDelete: Restrict)
+  generatedBy User?  @relation("ReportGeneratedBy", fields: [generatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([personId, generatedAt])
+  @@index([generatedByUserId, generatedAt])
+  @@map("report_generations")
 }
 
 // ─────────────────────────────────────────────

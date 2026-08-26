@@ -28,6 +28,7 @@ import aiMedicationDraftsRoutes from '@/modules/ai-medication-drafts/ai-medicati
 import calendarRoutes from '@/modules/calendar/calendar.routes';
 import personRoutes from '@/modules/person/person.routes';
 import appointmentRoutes from '@/modules/appointments/appointments.routes';
+import reportRoutes from '@/modules/reports/reports.routes';
 import billingRoutes from '@/modules/billing/billing.routes';
 import billingWebhookRoutes from '@/modules/billing/webhook.routes';
 
@@ -142,6 +143,7 @@ export const createApp = () => {
   app.use(`${prefix}/calendar`, calendarRoutes);
   app.use(`${prefix}/persons`, personRoutes);
   app.use(`${prefix}/appointments`, appointmentRoutes);
+  app.use(`${prefix}/reports`, reportRoutes);
   app.use(`${prefix}/billing`, billingRoutes);  
   // ─────────────────────────────────────────────
   // Error handling — must be last
