@@ -47,6 +47,7 @@ export async function createUser(
       ownerUserId: user.id,
       claimedAt: new Date(),
       createdByUserId: user.id,
+      origin: 'SELF',
     },
   });
 

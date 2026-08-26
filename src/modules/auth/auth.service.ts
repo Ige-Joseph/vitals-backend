@@ -184,6 +184,11 @@ export const authService = {
           ownerUserId: user.id,
           claimedAt: new Date(),
           createdByUserId: user.id,
+          // Provenance, set once. Without it the column default (MANAGED)
+          // applies and every account's own record claims to be a dependent —
+          // wrong on its face, and read by the first-baby exemption and the
+          // person switcher.
+          origin: 'SELF',
         },
       });
 
