@@ -22,28 +22,45 @@ local benchmarks.
 
 The application uses Prisma directly, so local development only needs ordinary
 PostgreSQL and Redis; a full local Supabase stack is not required.
-Compose binds both services to `127.0.0.1`, not every network interface.
 
 ```bash
-docker compose up -d postgres redis
+docker compose up -d --wait
 npx prisma migrate deploy
 npm run db:seed
 npm run dev
 ```
 
-If containers were created before the loopback-only port bindings were added,
-apply them once with `docker compose up -d --force-recreate postgres redis`.
-
-Use these local connection values in `.env`:
+Use these local connection values in `.env` — they match `docker-compose.yml`
+and the README, which is the authoritative pair:
 
 ```dotenv
-DATABASE_URL=postgresql://vitals:vitals_local@localhost:5432/vitals_dev
-DIRECT_URL=postgresql://vitals:vitals_local@localhost:5432/vitals_dev
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=vitals_local
-REDIS_TLS=false
+DATABASE_URL=postgresql://postgres:local@localhost:5433/vitals
+DIRECT_URL=postgresql://postgres:local@localhost:5433/vitals
+UPSTASH_REDIS_URL=redis://localhost:6379
 ```
+
+Two things that catch people out:
+
+**Postgres is on 5433, not 5432.** It is published there so it cannot collide
+with another Postgres already on the host; inside the compose network it still
+listens on 5432. The credentials are `postgres` / `local`, database `vitals`.
+
+**Redis is configured by URL, and the local instance has no password.** The
+compose service runs `redis-server --appendonly no` with no `--requirepass`, so
+supplying `REDIS_PASSWORD` will fail the connection rather than secure it. Use
+the `redis://` scheme locally — `rediss://` enables TLS, which a local Redis does
+not speak. `src/config/env.ts` accepts either `UPSTASH_REDIS_URL` or the
+`REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` trio, and the URL is simpler.
+
+> **These ports are published on all interfaces**, not loopback only —
+> `docker-compose.yml` uses the short `"5433:5432"` form, which binds `0.0.0.0`.
+> On an untrusted network that is a local Postgres and Redis reachable by
+> anything that can route to the host. If that matters where you work, change
+> the mappings to `"127.0.0.1:5433:5432"` and `"127.0.0.1:6379:6379"` and
+> recreate the containers.
+
+The test database is a separate service on **5436** under the `test` profile —
+see the README. It is tmpfs-backed and wiped on restart.
 
 `DATABASE_URL` should use the Supabase transaction pooler in a deployed API.
 `DIRECT_URL` should be the direct database connection used by Prisma migrations.

@@ -61,20 +61,42 @@ token replayed inside the window succeeds, which is the accepted trade for not
 signing users out during ordinary use; Auth0 and better-auth both default to
 the same 30 seconds. Widening the window widens that exposure.
 
-## Deployment migration
+## Two transports, and which is which
 
-The body-based refresh-token contract remains temporarily available when the
-`X-Auth-Transport` header is absent. This permits deploying the backend before
-the updated browser application.
+The `X-Auth-Transport` header selects between them.
 
-The updated frontend can migrate an existing session once by sending the legacy
+| Header | Refresh token travels in | For |
+|---|---|---|
+| `X-Auth-Transport: cookie` | `HttpOnly` cookie | Browsers |
+| *(absent)* | The JSON response body | **Native clients**, and legacy browser sessions |
+
+The trusted-`Origin` check applies only to cookie transport, so a native client
+sending no `Origin` header is not affected by it.
+
+### The body transport is the native contract — do not remove it
+
+An earlier version of this document described the body-based contract as
+"temporarily available", to allow deploying the backend ahead of the updated
+browser application, and said to remove it once all supported browser releases
+had migrated.
+
+**That instruction is now wrong and should not be followed.** A React Native
+client depends on this transport: it cannot use an `HttpOnly` browser cookie,
+and it stores the refresh token in the platform keychain instead. Removing the
+body response would break every mobile client at once.
+
+What is safe to retire is the *browser's* use of it — a browser sending no
+`X-Auth-Transport` header should be considered legacy. What must stay is the
+transport itself. See [`MOBILE_API.md`](MOBILE_API.md) for the client contract
+that depends on it.
+
+### The one-time browser migration
+
+The updated frontend migrates an existing session once by sending the legacy
 refresh token in the request body with cookie transport enabled. It immediately
 removes the old access token, refresh token, and Zustand auth record from Web
-Storage.
-
-After all supported browser releases have migrated, remove the legacy response
-body behavior, make cookie transport the only browser contract, and update the
-Swagger schemas accordingly.
+Storage. That path is browser-specific and can be removed once no browser
+session predates cookie transport.
 
 ## Production requirements
 
