@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 
 import { prisma } from '@/lib/prisma';
+import { env } from '@/config/env';
 import { redisConnection } from '@/lib/redis';
 import { createLogger } from '@/lib/logger';
 import {
@@ -30,21 +31,45 @@ export const billingWorker = new Worker(
 
     const { webhookEventId } = job.data as ProcessBillingEventPayload;
 
-    await prisma.billingWebhookEvent.update({
+    // Counted on the row rather than read off the job, because the row is what
+    // outlives Redis. A queue flushed during a deploy takes its attempt counts
+    // with it; the sweeper still has to be able to tell an event that has been
+    // tried five times from one that has been tried once.
+    const attempt = await prisma.billingWebhookEvent.update({
       where: { id: webhookEventId },
       data: { status: 'PROCESSING', retryCount: { increment: 1 } },
+      select: { retryCount: true, providerEventId: true, type: true },
     });
 
     try {
       const outcome = await eventApplier.apply(webhookEventId);
       log.info('Billing event handled', { webhookEventId, outcome });
     } catch (err: any) {
+      const exhausted = attempt.retryCount >= env.BILLING_EVENT_MAX_ATTEMPTS;
+
       // Recorded on the row as well as thrown, so a stuck event is visible in
       // the database rather than only in a queue dashboard.
       await prisma.billingWebhookEvent.update({
         where: { id: webhookEventId },
-        data: { status: 'FAILED', error: err?.message ?? 'unknown error' },
+        data: {
+          status: exhausted ? 'DEAD_LETTERED' : 'FAILED',
+          error: err?.message ?? 'unknown error',
+        },
       });
+
+      if (exhausted) {
+        // The loudest line this file has. Past this point nothing will retry
+        // it on its own, and a billing event that never applied is money that
+        // moved and state that did not follow.
+        log.error('BILLING EVENT DEAD-LETTERED — needs a human', {
+          webhookEventId,
+          providerEventId: attempt.providerEventId,
+          type: attempt.type,
+          attempts: attempt.retryCount,
+          error: err?.message,
+        });
+      }
+
       throw err;
     }
   },

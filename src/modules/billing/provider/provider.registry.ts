@@ -9,10 +9,10 @@ const log = createLogger('provider-registry');
 /**
  * Which adapters exist.
  *
- * Empty, deliberately. No provider is integrated, and this file refuses rather
- * than pretending: a caller that needs one gets a clear error instead of a
- * silent no-op that looks like success and leaves a subscription live at a
- * provider nobody is talking to.
+ * Populated at start-up, and only for providers that are actually configured.
+ * An unconfigured provider is refused rather than pretended at: a caller gets
+ * a clear error instead of a silent no-op that looks like success and leaves a
+ * subscription live at a provider nobody is talking to.
  *
  * Registering an adapter is the whole of "adding a provider" from the rest of
  * the codebase's point of view.
@@ -46,6 +46,25 @@ export const providerRegistry = {
   },
 
   /**
+   * The adapter a new purchase should go through.
+   *
+   * One provider is registered, so "the default" is "the one there is". Kept
+   * as a function rather than a constant because the day a second one is added
+   * this becomes a routing decision — by currency, by country, by whichever is
+   * up — and the call sites should already be asking rather than naming a
+   * vendor.
+   */
+  requireDefault(): PaymentProviderAdapter {
+    const [adapter] = adapters.values();
+    if (!adapter) {
+      throw AppError.badRequest(
+        'No payment provider is configured, so a subscription cannot be bought right now.',
+      );
+    }
+    return adapter;
+  },
+
+  /**
    * Best-effort cancellation.
    *
    * Used by erasure and deactivation, where a provider outage must never block
@@ -54,10 +73,16 @@ export const providerRegistry = {
    * reconciliation to retry an unconfirmed cancellation.
    */
   async tryCancel(
-    provider: PaymentProvider,
-    providerSubscriptionId: string | null,
+    subscription: {
+      provider: PaymentProvider;
+      providerSubscriptionId: string | null;
+      /** Passed through untouched; only the adapter knows what is in it. */
+      providerMetadata?: unknown;
+    },
     reason: string,
   ): Promise<CancelResult> {
+    const { provider, providerSubscriptionId } = subscription;
+
     if (!providerSubscriptionId) {
       // Nothing was ever created provider-side — checkout never completed.
       return { confirmed: true, detail: 'no provider subscription' };
@@ -75,6 +100,8 @@ export const providerRegistry = {
     try {
       return await adapter.cancelSubscription({
         providerSubscriptionId,
+        providerMetadata:
+          (subscription.providerMetadata as Record<string, unknown> | undefined) ?? undefined,
         immediate: true,
         reason,
       });

@@ -3,6 +3,7 @@ import { AppError } from '@/lib/errors';
 import { env } from '@/config/env';
 import { createLogger } from '@/lib/logger';
 import { entitlementService } from './entitlement.service';
+import { providerRegistry } from './provider/provider.registry';
 import {
   TIER_ENTITLEMENTS,
   TIER_DESCRIPTIONS,
@@ -107,6 +108,10 @@ export const billingService = {
       },
       tiers: Object.values(TIER_DESCRIPTIONS).map(billingService.describeTier),
       checkoutUrl: billingService.checkoutUrl(),
+      // Whether a purchase can actually be started right now. The page needs
+      // to know: an upgrade button that leads to "no provider configured" is
+      // worse than one that is honestly absent.
+      checkoutAvailable: providerRegistry.isConfigured,
     };
   },
 

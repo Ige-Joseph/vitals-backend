@@ -141,11 +141,17 @@ describe('the provider registry refuses rather than pretending', () => {
   });
 
   it('reports an unconfirmed cancellation rather than a false success', async () => {
-    const result = await providerRegistry.tryCancel('PAYSTACK', 'sub_x', 'test');
+    const result = await providerRegistry.tryCancel(
+      { provider: 'PAYSTACK', providerSubscriptionId: 'sub_x' },
+      'test',
+    );
     expect(result.confirmed).toBe(false);
 
     // Nothing to cancel is genuinely fine, and says so.
-    const nothing = await providerRegistry.tryCancel('PAYSTACK', null, 'test');
+    const nothing = await providerRegistry.tryCancel(
+      { provider: 'PAYSTACK', providerSubscriptionId: null },
+      'test',
+    );
     expect(nothing.confirmed).toBe(true);
   });
 });

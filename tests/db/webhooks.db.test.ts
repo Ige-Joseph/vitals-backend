@@ -22,10 +22,34 @@ const app = createApp();
 const MONTHLY = 'premium-monthly-2026-08';
 const at = (offsetMs: number) => new Date(Date.now() + offsetMs);
 
-/** Minimal adapter: signature is valid iff the header says so. */
+/**
+ * Minimal adapter: signature is valid iff the header says so, and events are
+ * already in our vocabulary.
+ *
+ * Deliberately not the Paystack adapter. These tests are about the guarantees
+ * intake makes — replay, ordering, grace, refund-after-erasure — and running
+ * them through a real vendor's translation would test both at once and locate
+ * a failure in neither. The Paystack translation has its own suite.
+ */
 const stubAdapter = {
   name: 'PAYSTACK' as const,
-  createCheckout: async () => ({ redirectUrl: 'https://example.test', providerReference: 'ref' }),
+  parseEvent: (rawBody: Buffer) => {
+    const parsed = JSON.parse(rawBody.toString('utf8'));
+    if (!parsed.providerEventId) return null;
+    return {
+      providerEventId: parsed.providerEventId,
+      type: parsed.type,
+      occurredAt: new Date(parsed.occurredAt),
+      payload: parsed.payload ?? {},
+    };
+  },
+  ensurePlan: async (price: { id: string }) => `plan_${price.id}`,
+  createCheckout: async () => ({
+    redirectUrl: 'https://example.test',
+    providerReference: 'ref',
+    providerCustomerRef: null,
+    providerMetadata: {},
+  }),
   cancelSubscription: async () => ({ confirmed: true }),
   fetchSubscription: async () => null,
   verifyWebhookSignature: (_raw: Buffer, headers: Record<string, string>) =>

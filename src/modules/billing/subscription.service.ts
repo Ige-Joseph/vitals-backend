@@ -51,11 +51,7 @@ export const subscriptionService = {
     const now = new Date();
 
     for (const subscription of subscriptions) {
-      const result = await providerRegistry.tryCancel(
-        subscription.provider,
-        subscription.providerSubscriptionId,
-        reason,
-      );
+      const result = await providerRegistry.tryCancel(subscription, reason);
 
       if (!result.confirmed) unconfirmed += 1;
 

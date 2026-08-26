@@ -29,6 +29,16 @@ export interface CheckoutRequest {
   /** Our subscription row, created before checkout so a webhook can find it. */
   subscriptionId: string;
   priceId: string;
+  /** The provider's handle for the plan, from ensurePlan. */
+  providerPlanId: string;
+  /**
+   * Which attempt at paying for this subscription this is, from 1.
+   *
+   * A payer who abandons a checkout and comes back reuses the subscription
+   * row, and a provider will not accept the same payment reference twice. The
+   * attempt is what keeps one stable row and a fresh reference each time.
+   */
+  attempt: number;
   amountMinor: number;
   currency: string;
   /** Where the provider returns the payer afterwards. */
@@ -50,10 +60,26 @@ export interface CheckoutSession {
   /** Where the payer is sent. Always absolute. */
   redirectUrl: string;
   providerReference: string;
+  /**
+   * The provider's handle for the payer, if it named one before payment.
+   *
+   * Worth having early. Some providers do not tell us the subscription id
+   * until the first charge clears, and the customer is then the only thing
+   * connecting the eventual subscription back to the row we created here.
+   */
+  providerCustomerRef: string | null;
+  /** Adapter-private handles to persist alongside the subscription. */
+  providerMetadata: Record<string, unknown>;
 }
 
 export interface CancelRequest {
   providerSubscriptionId: string;
+  /**
+   * Whatever else the provider needs to act on this subscription, opaque to
+   * everyone but the adapter. Paystack will not cancel on the subscription
+   * code alone.
+   */
+  providerMetadata?: Record<string, unknown>;
   /**
    * Immediate cancellation ends access now; otherwise the subscriber keeps
    * what they paid for until the period ends.
@@ -72,8 +98,79 @@ export interface CancelResult {
   detail?: string;
 }
 
+/**
+ * An inbound event, translated into our vocabulary.
+ *
+ * Every field is ours. A provider's own names, statuses and shapes stop at the
+ * adapter boundary — nothing outside this folder should be able to tell which
+ * provider an event came from by looking at it.
+ */
+/**
+ * What an event tells us, in our field names.
+ *
+ * Every field is optional because providers differ in what they put on which
+ * event, and an absent field means "this event says nothing about that" — not
+ * "set it to null". The applier writes only what is present.
+ */
+export interface NormalisedEventPayload {
+  providerSubscriptionId?: string;
+  providerCustomerRef?: string;
+  providerReference?: string;
+  /** The provider's handle for the price, matching Price.providerPriceId. */
+  providerPriceId?: string;
+  /** Our own subscription id, if it survived the round trip through checkout. */
+  localSubscriptionId?: string;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  amountMinor?: number;
+  currency?: string;
+  cancelAtPeriodEnd?: boolean;
+  /** Adapter-private handles worth keeping. Never read outside the adapter. */
+  providerMetadata?: Record<string, unknown>;
+}
+
+export interface NormalisedEvent {
+  /**
+   * Stable and unique per event.
+   *
+   * Some providers supply one. Others do not, and the adapter has to derive
+   * something that is stable across redeliveries of the *same* event and
+   * distinct between different ones — that derivation is the adapter's
+   * problem, not intake's.
+   */
+  providerEventId: string;
+  type: string;
+  /** When the provider says it happened. Used for out-of-order protection. */
+  occurredAt: Date;
+  payload: Record<string, unknown>;
+}
+
 export interface PaymentProviderAdapter {
   readonly name: PaymentProvider;
+
+  /**
+   * Turn a raw provider body into an event in our terms.
+   *
+   * Returns null for anything we do not act on, so intake can acknowledge it
+   * without storing noise. Called only after the signature has been verified.
+   */
+  parseEvent(rawBody: Buffer): NormalisedEvent | null;
+
+  /**
+   * Make sure a price is purchasable at the provider, returning its handle.
+   *
+   * Recurring billing is the provider's job — a plan there renews on its own
+   * schedule and tells us about it, which is a great deal less to get wrong
+   * than a renewal loop of our own.
+   */
+  ensurePlan(price: {
+    id: string;
+    label: string;
+    amountMinor: number;
+    currency: string;
+    interval: string;
+    intervalCount: number;
+  }): Promise<string>;
 
   createCheckout(request: CheckoutRequest): Promise<CheckoutSession>;
 

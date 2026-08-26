@@ -65,6 +65,13 @@ const envSchema = z
     PREMIUM_SYMPTOM_CHECKS_PER_DAY: z.coerce.number().default(20),
     PREMIUM_DRUG_DETECTIONS_PER_DAY: z.coerce.number().default(20),
 
+    // Paystack. Optional: the adapter only registers when a key is present,
+    // so an environment without one simply has no provider configured.
+    PAYSTACK_SECRET_KEY: z.string().optional(),
+    PAYSTACK_BASE_URL: z.string().url().default('https://api.paystack.co'),
+    /// Failed billing events older than this are dead-lettered.
+    BILLING_EVENT_MAX_ATTEMPTS: z.coerce.number().default(5),
+
     // Billing
     // How long a failed renewal keeps Premium. Runs from the failed charge,
     // not from the period end.

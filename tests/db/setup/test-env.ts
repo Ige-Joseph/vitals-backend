@@ -38,3 +38,18 @@ if (!databaseName.endsWith('_test')) {
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = url;
 process.env.DIRECT_URL = url;
+
+/**
+ * Point the payment provider at nothing.
+ *
+ * Tests that exercise the provider stand up their own HTTP stub on localhost
+ * and repoint this. What this line prevents is the case in between: an adapter
+ * built at module load, before any stub exists, quietly inheriting the real
+ * `https://api.paystack.co` and making live calls from a test run. Port 9 is
+ * the discard port — a connection there fails immediately and locally.
+ *
+ * The secret key is cleared for the same reason: nothing should be able to
+ * authenticate as us from a test.
+ */
+process.env.PAYSTACK_BASE_URL = 'http://127.0.0.1:9';
+delete process.env.PAYSTACK_SECRET_KEY;

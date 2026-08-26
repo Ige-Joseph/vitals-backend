@@ -11,6 +11,7 @@ import { redisConnection } from '@/lib/redis';
 import { prisma } from '@/lib/prisma';
 import { initFirebase } from '@/lib/firebase';
 import { createLogger } from '@/lib/logger';
+import { registerPaystack } from '@/modules/billing/provider/paystack';
 
 const log = createLogger('worker');
 
@@ -18,6 +19,10 @@ const start = async () => {
   // Initialise Firebase Admin — the reminder engine needs it to send FCM push notifications.
   // No-op if Firebase env vars are not set.
   initFirebase();
+
+  // The worker cancels and reconciles against the provider, so it needs the
+  // adapter as much as the API process does.
+  registerPaystack();
 
   try {
     await prisma.$connect();

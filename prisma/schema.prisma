@@ -223,6 +223,10 @@ enum WebhookEventStatus {
   /// subscription we do not know about.
   IGNORED
   FAILED
+
+  /// Retries exhausted. Kept, surfaced, and never retried automatically —
+  /// a silently stuck billing event is money going wrong unobserved.
+  DEAD_LETTERED
 }
 
 enum PaymentTransactionType {
@@ -628,6 +632,14 @@ model Subscription {
   /// The provider's customer handle. Kept separately so a refund arriving
   /// after erasure can still be attributed without a user row.
   providerCustomerRef String?
+
+  /// Provider-specific handles this subscription cannot be operated without.
+  ///
+  /// Opaque here on purpose: only the adapter knows what is inside, which is
+  /// what keeps a vendor's vocabulary out of the schema. Paystack, for one,
+  /// needs a second token alongside the subscription code before it will
+  /// accept a cancellation.
+  providerMetadata Json @default("{}")
 
   currentPeriodStart DateTime?
   currentPeriodEnd   DateTime?

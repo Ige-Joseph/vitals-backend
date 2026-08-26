@@ -1,10 +1,12 @@
 import type { PaymentProvider } from '@prisma/client';
 
 import { prisma } from '@/lib/prisma';
+import { env } from '@/config/env';
 import { AppError } from '@/lib/errors';
 import { createLogger } from '@/lib/logger';
 import { billingQueue, JOB_NAMES } from '@/queues/queue.registry';
 import { providerRegistry } from './provider/provider.registry';
+import type { NormalisedEvent } from './provider/payment.provider';
 
 const log = createLogger('billing-webhook');
 
@@ -24,14 +26,6 @@ export interface RawWebhook {
   headers: Record<string, string>;
 }
 
-/** What every adapter must produce from a raw event. */
-export interface NormalisedEvent {
-  providerEventId: string;
-  type: string;
-  occurredAt: Date;
-  payload: Record<string, unknown>;
-}
-
 export const webhookService = {
   /**
    * Take an event in.
@@ -40,7 +34,7 @@ export const webhookService = {
    * trusted: an unsigned or mis-signed request is not a malformed event, it is
    * an unauthenticated one, and it must not reach the database at all.
    */
-  async receive(raw: RawWebhook): Promise<{ status: 'accepted' | 'duplicate' }> {
+  async receive(raw: RawWebhook): Promise<{ status: 'accepted' | 'duplicate' | 'ignored' }> {
     const adapter = providerRegistry.find(raw.provider);
 
     if (!adapter) {
@@ -53,15 +47,21 @@ export const webhookService = {
       throw AppError.unauthorized('Invalid webhook signature');
     }
 
-    let event: NormalisedEvent;
+    // Translation is the adapter's job. Intake never sees a vendor's field
+    // names, and never has to guess at a shape it was not designed for.
+    let event: NormalisedEvent | null;
     try {
-      event = JSON.parse(raw.rawBody.toString('utf8')) as NormalisedEvent;
-    } catch {
-      throw AppError.badRequest('Webhook body is not valid JSON');
+      event = adapter.parseEvent(raw.rawBody);
+    } catch (err: any) {
+      throw AppError.badRequest(`Could not parse webhook: ${err?.message ?? 'unknown'}`);
     }
 
-    if (!event.providerEventId || !event.type || !event.occurredAt) {
-      throw AppError.badRequest('Webhook is missing providerEventId, type or occurredAt');
+    if (!event) {
+      // Signed, well-formed, and nothing we act on. Acknowledged so the
+      // provider stops resending, and not stored, because storing every
+      // uninteresting event makes the interesting ones harder to find.
+      log.debug('Webhook ignored — not an event we act on', { provider: raw.provider });
+      return { status: 'ignored' };
     }
 
     // Idempotency lives here, on the provider's event id. A replay loses the
@@ -103,7 +103,13 @@ export const webhookService = {
     await billingQueue.add(
       JOB_NAMES.PROCESS_BILLING_EVENT,
       { webhookEventId: stored.id },
-      { jobId: `billing-event-${stored.id}`, attempts: 5, backoff: { type: 'exponential', delay: 5000 } },
+      {
+        jobId: `billing-event-${stored.id}`,
+        // The same number the worker dead-letters at, so the queue giving up
+        // and the row being marked exhausted are one decision, not two.
+        attempts: env.BILLING_EVENT_MAX_ATTEMPTS,
+        backoff: { type: 'exponential', delay: 5000 },
+      },
     );
 
     log.info('Webhook accepted', {
