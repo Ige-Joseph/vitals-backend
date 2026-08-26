@@ -55,6 +55,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # swagger-jsdoc drops a block whose YAML does not parse and says nothing
+      # about it, so a spec missing half its routes looks exactly like a healthy
+      # one. This counts route handlers in the source against the operations the
+      # spec actually produced and fails when they disagree — which is what
+      # catches a new route added without documentation, or a block broken by an
+      # edit. Static: it reads the source and needs no database.
+      - name: Verify OpenAPI spec
+        run: npm run verify:openapi
+
       - name: Test
         run: npm test -- --ci --maxWorkers=2
 
