@@ -35,6 +35,7 @@ const DOCS = [
   'docs/AUTHENTICATION.md',
   'docs/DEPLOYMENT.md',
   'docs/MOBILE_API.md',
+  'docs/MOBILE_CLIENT.md',
 ];
 
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
