@@ -152,7 +152,11 @@ services:
       sh -c "npx prisma migrate deploy &&
              node -r module-alias/register dist/main.js"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/health || exit 1"]
+      # 127.0.0.1, not localhost. The container resolves `localhost` to both
+      # 127.0.0.1 and ::1, busybox wget tries the IPv6 address first, and the
+      # server binds 0.0.0.0 — IPv4 only. Against `localhost` this check fails
+      # with "connection refused" on a perfectly healthy API.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12

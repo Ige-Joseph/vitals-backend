@@ -153,10 +153,15 @@ Migrations run automatically when the backend container starts — `prisma` is a
 runtime dependency, so the production image has the CLI.
 
 ```bash
+docker compose --profile app up -d --wait       # start, blocking until healthy
 docker compose --profile app logs -f backend    # watch it migrate and boot
 docker compose --profile app up -d --build      # rebuild after a change
 docker compose --profile app down               # stop the apps and the database
 ```
+
+`--wait` is worth knowing about here: the backend runs migrations before it
+listens, so the API is reachable a little after the container starts. `--wait`
+blocks until its healthcheck passes, which is what you want in a script.
 
 The database is the same `vitals-pgdata` volume the host loop uses, so data
 carries across between the two ways of running.
