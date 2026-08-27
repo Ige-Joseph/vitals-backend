@@ -19,6 +19,50 @@ Browser ──▶ Vercel (frontend)  ──▶ Render (API + worker)  ──▶ 
 Both hosts deploy from `main` in their own repository. The two repositories are
 separate: `Ige-Joseph/vitals-backend` and `Ige-Joseph/vitals-frontend`.
 
+### The agreed target topology — decided, not yet deployed
+
+This is a **decision record**, not a description of what is running. Everything
+above is what is live today; everything here is where it is going.
+
+```
+Internet ──▶ Cloudflare (TLS, DDoS, cache, rate limit)
+                  │
+                  ▼
+             Vercel (React web app)
+                  │  /api
+                  ▼
+             Oracle VM — 1 GB RAM
+             ├── Node API
+             ├── BullMQ workers (same process)
+             └── Redis (self-hosted)
+                  │
+        ┌─────────┴─────────┐
+        ▼                   ▼
+   Supabase (Postgres)   Brevo (email)
+```
+
+**Redis moves onto the box, and must not evict.** BullMQ represents queued and
+delayed jobs *as Redis state* — it is not a cache. An eviction under memory
+pressure does not slow anything down; it silently deletes scheduled work, and
+for this product that means a medication reminder disappearing rather than
+failing loudly. Configure `maxmemory 100mb`, `maxmemory-policy noeviction` and
+`appendonly yes`: rejecting writes surfaces an operational problem, whereas
+evicting hides one. Rotate the Upstash credential once the move is done —
+`UPSTASH_REDIS_URL` and `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` are already
+both supported, so this is a configuration change rather than a code one.
+
+**Cloudflare sits in front, and does not host the API.** Workers can run an API,
+but not this one: it needs a permanently running process for BullMQ, delayed
+jobs held in Redis, and scheduled sweeps, none of which fit a request-scoped
+execution model with a short CPU budget. Cloudflare's job here is the edge —
+TLS, DDoS protection, caching and rate limiting before traffic reaches a 1 GB
+machine. Narrow edge endpoints can move to Workers later without moving the
+backend.
+
+**The 1 GB instance is what shapes the rest.** It is why the API and workers
+share a process, why report rendering is queued at concurrency 1, and why the
+report sweep matters — see "Reports write files" below.
+
 ## Verified working — as of 2026-08-22, not since
 
 Checked against `vitals-backend-service.onrender.com`:
@@ -147,6 +191,33 @@ Postgres has no `DROP VALUE`, so a rollback leaves them in place. They are inert
 when unused, and each migration's header says so — but it means a partial
 rollback of a release is not symmetrical, and the rollback notes are worth
 reading before you need them.
+
+## Reports write files
+
+Health summaries are rendered by a worker and held on disk until the reader
+fetches them, then deleted. Three settings govern that, and the defaults are
+deliberately short:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `REPORT_STORAGE_DIR` | `/tmp/vitals-reports` | Where documents are written, `0600` in a `0700` directory |
+| `REPORT_TTL_MINUTES` | `60` | How long a rendered summary stays fetchable |
+| `REPORT_SWEEP_INTERVAL_MS` | `300000` | How often expired documents are deleted |
+
+**Do not mount `REPORT_STORAGE_DIR` as a persisted volume.** A lost file costs a
+regeneration; a file surviving a restart is a health record outliving the
+process that was accountable for deleting it. The download path already treats
+a missing file as expired and corrects the row, so restarts are handled.
+
+**The sweep is the only thing that deletes these files.** It runs inside the
+worker, registered alongside the reminder engine. If the worker is not running,
+documents accumulate — which is one more reason the "worker not running" failure
+below matters. The sweep also removes files that no database row owns, which is
+what a crash between writing a document and committing its row leaves behind.
+
+Disk use is bounded by roughly `TTL × request rate × document size`. On the
+1 GB instance that is small, but it is not zero, and it is the one thing here
+that grows with usage.
 
 ## Configuration that fails closed
 

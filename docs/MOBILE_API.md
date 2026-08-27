@@ -566,32 +566,100 @@ Cancelling ends the **next charge**, not today's access — Premium runs to
 
 ## 8. Reports
 
-`GET /reports/health-summary?personId=&from=&to=` — a PDF of what has been
-recorded for one Person over a period.
+A PDF of what has been recorded for one Person over a period. **Asking for one
+and fetching it are two different requests.**
 
-**This streams a file. It does not return JSON.** Do not put it through your
-normal API client, which unwraps `data` and will produce garbage.
+```
+POST /reports/health-summary          { personId?, from?, to? }   → 202 { id, status }
+GET  /reports/health-summary/{id}                                 → status
+GET  /reports/health-summary/{id}/download                        → the PDF
+```
+
+### The flow
+
+```text
+POST /reports/health-summary
+      ↓  202 Accepted, status PENDING
+poll GET /reports/health-summary/{id}
+      ↓  PENDING → PROCESSING → READY
+GET  /reports/health-summary/{id}/download
+      ↓  application/pdf
+save to a file, hand to the OS viewer or share sheet
+```
+
+Rendering happens on a worker, one document at a time. A summary is usually
+ready in a second or two, but the point of `202` is that you must not assume
+it: poll rather than sleeping for a fixed interval.
+
+```jsonc
+// GET /reports/health-summary/{id}  →  data
+{ "id": "…", "personId": "…", "kind": "HEALTH_SUMMARY",
+  "status": "READY",                  // PENDING | PROCESSING | READY | FAILED | EXPIRED
+  "periodStart": "…", "periodEnd": "…",
+  "generatedAt": "…",                 // when it was asked for
+  "completedAt": "…",                 // when rendering finished
+  "expiresAt": "…",                   // when the file is deleted
+  "downloadedAt": null,               // when a copy first left the system
+  "failureReason": null }             // set when status is FAILED
+```
+
+### The document expires
+
+`expiresAt` is set when rendering finishes — an hour later by default. After
+that the file is deleted and the download answers **410 Gone**.
+
+That is not an error to apologise for. Show something like *"This summary has
+expired — generate a new one"* and offer the button again. Treating 410 as a
+failure state is the most likely way to get this wrong.
+
+The **record** that a summary was generated is kept permanently; only the file
+expires. `GET /reports/generations?personId=` still lists them, and that list is
+the answer to "who has taken a copy of this Person's history out of the system".
+
+### Downloading
+
+**This streams a file. It does not return the JSON envelope.** Do not put it
+through your normal API client, which unwraps `data` and will produce garbage.
 
 ```
 Content-Type: application/pdf
 Content-Disposition: attachment; filename="vitals-summary-….pdf"
+Content-Length: …
 Cache-Control: no-store, private
 ```
 
 In React Native, download it to a file and hand it to the OS share or viewer —
-`react-native-blob-util`, `expo-file-system` or similar. **Errors still return
-JSON**, so check the status and content type before treating the body as a PDF.
+`expo-file-system` plus `expo-sharing`, or `react-native-blob-util`. **Errors
+still return JSON**, so check the status and content type before treating the
+body as a PDF.
 
-Two independent gates, and they fail differently:
+The download needs your `Authorization` header like any other request. There is
+no signed URL and there is deliberately never going to be one: access is
+re-resolved from the database on **every** download, so a membership revoked
+after the document was generated stops the next fetch. A signed URL would keep
+working, which is exactly what must not happen to a health record.
 
-- **403 with a membership message** — no access to that Person
-- **403 with a Premium message** — this is a Premium feature
+### The failures, and how they differ
 
-Access is checked *first*, so someone with no relationship to a Person is told
-that, not invited to upgrade.
+| Status | Meaning | What to show |
+|---|---|---|
+| `400` | still `PENDING`/`PROCESSING` | keep polling — you fetched too early |
+| `400` | status is `FAILED` | `failureReason`, and offer to try again |
+| `403` | membership | no access to that Person |
+| `403` | Premium | this is a Premium feature |
+| `404` | no such report | — |
+| `410` | expired | offer to generate a new one |
 
-`GET /reports/generations?personId=` lists when summaries were generated and by
-whom. No file is stored — regenerating is how you get another copy.
+Both `403`s are checked again on **every** download, not just when you asked.
+Access is checked before entitlement, so someone with no relationship to a
+Person is told that rather than invited to upgrade.
+
+### The older synchronous route still works
+
+`GET /reports/health-summary` renders inside the request and streams the PDF
+back, exactly as it always did. It is **deprecated** and kept only while the
+web client migrates. Do not build a new client on it: it renders on the same
+process that serves requests, which is the reason the asynchronous flow exists.
 
 ---
 
@@ -682,12 +750,21 @@ record is not empty.
 
 The rule: *absence* of the option is never explained; *refusal* of it always is.
 
-### Reports stream a file
+### Reports are two requests, and the file expires
 
-Covered in §8 and repeated because it will bite: `GET /reports/health-summary`
-returns `application/pdf` bytes, not the JSON envelope. A generic API client
-will parse it as JSON, fail, and produce a confusing error a long way from the
-cause.
+Covered in §8 and repeated because both halves bite.
+
+**The download returns bytes, not the JSON envelope.** A generic API client will
+parse `application/pdf` as JSON, fail, and produce a confusing error a long way
+from the cause. Route the download around your normal client.
+
+**`410` on a download means the document expired**, not that something broke.
+Documents are deleted about an hour after they are rendered, on purpose — a
+stored PDF is one Person's whole record sitting outside the tables that own it.
+Offer to generate another rather than showing an error.
+
+**`202` is not success.** It means rendering was queued. A client that treats it
+as done and never polls will show a report that never arrives.
 
 ### Other things
 
@@ -716,6 +793,7 @@ both is a 400.
 | Document | Covers |
 |---|---|
 | Swagger UI at `/api-docs` | Every endpoint, live, with request and response schemas |
+| [`MOBILE_CLIENT.md`](MOBILE_CLIENT.md) | Client decisions — Expo, design system, deep links, offline — and the two schema gaps they depend on |
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | Why the Person model exists, and the reasoning behind the rules above |
 | [`AUTHENTICATION.md`](AUTHENTICATION.md) | Token model in full, rotation grace window |
 | [`AI_SAFETY.md`](AI_SAFETY.md) | What AI output may and may not say |

@@ -297,11 +297,34 @@ timings —
 | `MISSED_WINDOW_MS` | 2h | How overdue a care event is before it counts as missed |
 | `APPOINTMENT_MISSED_GRACE_MS` | 2h | Grace after an appointment's **end** before it counts as missed |
 | `APPOINTMENT_SWEEP_INTERVAL_MS` | 15m | How often that sweep runs |
+| `REPORT_STORAGE_DIR` | `/tmp/vitals-reports` | Where rendered health summaries are held until fetched |
+| `REPORT_TTL_MINUTES` | 60 | How long a rendered summary stays fetchable |
+| `REPORT_SWEEP_INTERVAL_MS` | 5m | How often expired summaries are deleted |
 | `ADHERENCE_CHECK_DELAY_MS` | 30m | Delay before an adherence check fires |
 
 See `.env.example` for the full annotated list.
 
 ---
+
+### Health summaries expire
+
+Reports are not rendered inside the request. `POST /reports/health-summary`
+returns `202` with a row to poll; a worker renders the document one at a time,
+and the download is a separate authenticated request.
+
+The document is **deleted about an hour after it is rendered**, and the download
+then answers `410`. That is the design working, not a fault: a stored PDF is one
+Person's entire health record sitting outside the tables that own it. The record
+that a summary was generated is kept permanently; only the file expires.
+
+`REPORT_STORAGE_DIR` should **not** be a persisted volume — a lost file costs a
+regeneration, whereas a file surviving a restart outlives the process that was
+accountable for deleting it. The sweep that deletes them runs inside the worker,
+so a backend running without its worker will accumulate documents.
+
+The older `GET /reports/health-summary`, which renders inside the request and
+streams the PDF back, still works and is deprecated. It is kept only while the
+web client migrates.
 
 ## API documentation
 
@@ -346,7 +369,7 @@ src/
     care/             Shared care engine — plans, events, reminders
     medications/      Medication plans and dose scheduling
     appointments/     Appointments, person-native
-    reports/          Streamed PDF health summaries
+    reports/          PDF health summaries, rendered by a worker
     mother-baby/      Pregnancy timeline, delivery, baby vaccination
     calendar/         Google Calendar sync
     mood/             Mood and craving logging
@@ -388,7 +411,7 @@ tests/
 | `/api/v1/billing` | Tiers, plan, checkout, cancellation, admin tier writes |
 | `/api/v1/billing/webhooks` | Provider webhooks — unauthenticated, signature-verified |
 | `/api/v1/appointments` | Appointments for a Person |
-| `/api/v1/reports` | Streamed PDF health summary |
+| `/api/v1/reports` | PDF health summaries — requested, rendered by a worker, then downloaded |
 | `/api/v1/care` | Care event timeline and status |
 | `/api/v1/medications` | Medication plans and schedules |
 | `/api/v1/mother-baby` | Pregnancy, delivery, baby vaccination |

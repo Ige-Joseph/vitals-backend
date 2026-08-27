@@ -350,8 +350,10 @@ It is **not** `ActivityLog`, which is a user-facing feed — and it is not
 repurposed as one.
 
 `ReportGeneration` is the same idea for exports: it records that a summary left
-the system — who, whose record, when, over what period — and deliberately has
-no file column.
+the system — who, whose record, when, over what period. It now also carries the
+lifecycle of the document, including `storageKey` while one exists. The row
+outlives the file deliberately: the document expires within the hour, the record
+that a copy was taken does not.
 
 ### Two things the ledger deliberately does not record
 
@@ -502,28 +504,81 @@ row is the ordinary case rather than an edge one. A read followed by a write
 would let both claim it. `RETURNING` tells each worker exactly which rows it —
 and only it — took.
 
-### Why reports stream instead of queuing
+### Why reports queue, and what that cost
 
-The rule is that long-running work goes to the worker. Health summaries look
-like they qualify and do not, and the code says so explicitly so it is not
-"fixed" later into something worse.
+This section used to argue the opposite, and the reversal is worth recording
+along with what did **not** change.
 
-That rule exists to keep **slow** work off the request path. Rendering one
-Person's summary with PDFKit is a few dozen rows laid out as text — it is not
-slow, and there is no long-running work to move. Making it a job would not
-remove work from the request; it would **add a stored artefact**, and the
-artefact is the problem: a PDF holding an entire health record, duplicated
-outside the tables that own it and outside every access check that guards them,
-sitting somewhere until someone remembers to delete it.
+The original objection was never that rendering is slow. It was that making it
+a job **adds a stored artefact** — a PDF holding an entire health record,
+duplicated outside the tables that own it and outside every access check that
+guards them, sitting somewhere until someone remembers to delete it. That is
+still exactly what a stored report is, and it is still the risk.
 
-So the document is rendered into the response and nothing is kept. If a summary
-ever does become slow, the answer is to stream it in pages, or to accept a job
-whose output is deleted on a timer. It is not to quietly start storing health
-records.
+What changed is where this runs. The API and the workers share one Node process
+on a 1 GB instance. PDFKit rendering is the most CPU-hungry thing that process
+does, and on the request path it competes for the same event loop as every
+other request — including the reminder engine. Stall it long enough and BullMQ
+stops renewing job locks, at which point healthy jobs are reported as stalled
+and retried. The danger was never latency; it was **blocking**.
+
+The earlier note named its own escape hatch — *"accept a job whose output is
+deleted on a timer"* — and this is that, taken deliberately. The timer is not a
+follow-up task, and nothing in the module can produce a file without one:
+
+- `expiresAt` is written in the same update that sets `READY`
+- a sweep deletes the file and moves the row to `EXPIRED`
+- files that no row owns are swept too, so a crash between writing a document
+  and committing its row cannot leave a health record on disk untracked
+- the storage directory is **not** persisted across restarts, so a lost file
+  costs a regeneration rather than outliving the process accountable for it
+
+### Why downloads are authorised rather than addressed
+
+A signed storage URL is the usual way to serve a generated file, and is
+deliberately not used.
+
+A signed URL is a **bearer capability**: it keeps working for as long as it is
+valid, because nothing re-reads the membership that justified issuing it. That
+is precisely wrong here. Memberships change, and §5's rule — look them up,
+never carry them in a token — applies to a URL exactly as it applies to a JWT.
+
+So the document is served by an authenticated endpoint that re-resolves
+membership *and* entitlement on **every** download. Revoking a caregiver's
+access stops the next fetch of a document generated while they still had it.
+The storage key never appears in any response.
+
+### What the ledger means now
+
+`generatedAt` is when a summary was **asked for**. `downloadedAt` is when a copy
+actually **left the system**, and it is stamped once, on the first fetch.
+
+Under the synchronous contract those were the same instant, so one column
+carried both meanings. They are no longer the same: a document can be rendered
+and never fetched, which discloses nothing. The consent ledger records the
+disclosure, so it follows the download.
 
 ---
 
 ## 8. Reports
+
+### The lifecycle
+
+```text
+POST /reports/health-summary        both gates checked, row created PENDING
+        ↓                           202 Accepted — nothing rendered yet
+   reports queue                    priority 10, concurrency 1
+        ↓
+   worker renders                   gates checked AGAIN, file written 0600
+        ↓                           status READY, expiresAt set
+GET  …/{id}/download                gates checked AGAIN, downloadedAt stamped
+        ↓
+   sweep (every 5 min)              file deleted, status EXPIRED
+```
+
+The gates are resolved three times on purpose. Access can be revoked and
+Premium can lapse between asking for a document and fetching it, and both must
+stop the fetch.
 
 Two independent gates, resolved separately:
 
