@@ -9,8 +9,17 @@
  * constructed.
  */
 
+/**
+ * 127.0.0.1, not localhost.
+ *
+ * On Windows `localhost` resolves to ::1 first, and Docker Desktop's IPv6
+ * forwarding for published Postgres ports is unreliable — the port answers a
+ * TCP probe but Prisma fails with P1001 "Can't reach database server". Naming
+ * the IPv4 address avoids the whole question, and is equivalent everywhere
+ * else including CI.
+ */
 const DEFAULT_TEST_DATABASE_URL =
-  'postgresql://postgres:local@localhost:5436/vitals_test';
+  'postgresql://postgres:local@127.0.0.1:5436/vitals_test';
 
 const url = process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL;
 
@@ -53,3 +62,4 @@ process.env.DIRECT_URL = url;
  */
 process.env.PAYSTACK_BASE_URL = 'http://127.0.0.1:9';
 delete process.env.PAYSTACK_SECRET_KEY;
+
