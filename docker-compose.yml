@@ -140,7 +140,13 @@ services:
       # `X-Auth-Transport: cookie`, and the backend refuses one whose Origin is
       # not listed here — so these two must match the address you actually open.
       FRONTEND_URL: http://localhost:8080
-      CORS_ORIGIN: http://localhost:8080
+      #
+      # 8080 is the containerised web app. 5173 and 4173 are Vite's dev and
+      # preview servers, listed so a host-run frontend can talk to this backend
+      # without editing compose — the fast loop, where the frontend reloads on
+      # save and only the API is containerised. Without them that combination
+      # answers 403 with nothing obviously wrong.
+      CORS_ORIGIN: http://localhost:8080,http://localhost:5173,http://localhost:4173
 
       # The browser talks to the API through the frontend's proxy, so the API's
       # own public address is that same origin.
