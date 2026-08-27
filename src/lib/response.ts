@@ -9,7 +9,8 @@ export type ErrorCode =
   | 'DUPLICATE_REQUEST'
   | 'CONFLICT'
   | 'INTERNAL_ERROR'
-  | 'BAD_REQUEST';
+  | 'BAD_REQUEST'
+  | 'GONE';
 
 export interface ApiResponse<T = unknown> {
   success: boolean;
@@ -54,6 +55,16 @@ export const ok = <T>(res: Response, data: T, message = 'Success') =>
 
 export const created = <T>(res: Response, data: T, message = 'Created successfully') =>
   sendSuccess(res, data, message, 201);
+
+/**
+ * The request was understood and the work has been queued, not done.
+ *
+ * Distinct from `created`: 201 says the thing exists, 202 says it will. A
+ * client that treats 202 as success and stops polling has misread it, so the
+ * body carries the row whose `status` it should follow.
+ */
+export const accepted = <T>(res: Response, data: T, message = 'Accepted') =>
+  sendSuccess(res, data, message, 202);
 
 export const badRequest = (res: Response, message: string) =>
   sendError(res, message, 'BAD_REQUEST', 400);
