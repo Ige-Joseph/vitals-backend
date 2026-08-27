@@ -63,3 +63,14 @@ process.env.DIRECT_URL = url;
 process.env.PAYSTACK_BASE_URL = 'http://127.0.0.1:9';
 delete process.env.PAYSTACK_SECRET_KEY;
 
+/**
+ * Rendered health summaries go to a directory of this run's own.
+ *
+ * The suite writes real PDFs and then asserts they were deleted, so it must
+ * not share a directory with a running development server — a sweep in either
+ * one would delete the other's files and the failure would look like a bug in
+ * the code under test.
+ */
+process.env.REPORT_STORAGE_DIR =
+  process.env.REPORT_STORAGE_DIR ??
+  require('path').join(require('os').tmpdir(), `vitals-reports-test-${process.pid}`);

@@ -15,6 +15,7 @@ export const QUEUE_NAMES = {
   ADHERENCE: 'adherence',
   OUTBOX: 'outbox',
   BILLING: 'billing',
+  REPORTS: 'reports',
 } as const;
 
 export const JOB_NAMES = {
@@ -26,6 +27,7 @@ export const JOB_NAMES = {
   CHECK_MEDICATION_ADHERENCE: 'CHECK_MEDICATION_ADHERENCE',
   PROCESS_OUTBOX_EVENT: 'PROCESS_OUTBOX_EVENT',
   PROCESS_BILLING_EVENT: 'PROCESS_BILLING_EVENT',
+  GENERATE_HEALTH_SUMMARY: 'GENERATE_HEALTH_SUMMARY',
 } as const;
 
 export interface RecordedJob {
@@ -61,6 +63,7 @@ export const notificationsQueue = makeQueue(QUEUE_NAMES.NOTIFICATIONS);
 export const adherenceQueue = makeQueue(QUEUE_NAMES.ADHERENCE);
 export const outboxQueue = makeQueue(QUEUE_NAMES.OUTBOX);
 export const billingQueue = makeQueue(QUEUE_NAMES.BILLING);
+export const reportsQueue = makeQueue(QUEUE_NAMES.REPORTS);
 
 export const closeQueues = async (): Promise<void> => {
   /* no-op */
