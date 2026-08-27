@@ -106,6 +106,61 @@ docker compose down -v        # stop and destroy the volume
 > over the mapped port will tell you: different values mean two different
 > postmasters.
 
+### Running the whole stack in Docker
+
+The setup above runs the apps on the host against containerised infrastructure,
+which is the fast loop and what you want day to day. To run **everything** in
+containers instead — API, worker and the built web app:
+
+```bash
+docker compose --profile app up -d --build
+```
+
+| | Address |
+|---|---|
+| Web app | <http://localhost:8080> |
+| API (direct) | <http://localhost:3000> |
+| API (as the app sees it) | <http://localhost:8080/api/v1> |
+
+The `app` profile is opt-in, so a bare `docker compose up -d` still starts only
+Postgres and Redis and the host loop is unaffected.
+
+**What this is for.** It is slower to iterate on — every change needs a rebuild
+— so use it for the things the host loop cannot show you:
+
+- the **production frontend build**, not the dev server
+- the **same-origin `/api` proxy**, which is how production works and where the
+  dev setup differs most
+- **cookie auth over that proxy**, including refresh rotation
+- the **worker running beside the API**, as the deployed container does, so
+  reminders actually dispatch
+
+**How the pieces find each other.** The frontend container is nginx serving the
+built SPA and proxying `/api/` to the backend, mirroring the two rewrites in
+`vercel.json`. That matters: a production build resolves its API base URL to the
+empty string and calls its own origin, so without that proxy it has no backend
+at all. `VITE_API_URL` is deliberately left unset — setting it would make the
+requests cross-origin, which is a different transport from the one production
+uses.
+
+Because the browser reaches everything through `http://localhost:8080`, the
+backend container is configured with `FRONTEND_URL` and `CORS_ORIGIN` set to
+that origin. Auth requests carry `X-Auth-Transport: cookie` and the backend
+refuses one whose `Origin` is not listed, so if you publish the web app on a
+different port, change those two together or login answers **403**.
+
+Migrations run automatically when the backend container starts — `prisma` is a
+runtime dependency, so the production image has the CLI.
+
+```bash
+docker compose --profile app logs -f backend    # watch it migrate and boot
+docker compose --profile app up -d --build      # rebuild after a change
+docker compose --profile app down               # stop the apps and the database
+```
+
+The database is the same `vitals-pgdata` volume the host loop uses, so data
+carries across between the two ways of running.
+
 ### Migrations
 
 ```bash
