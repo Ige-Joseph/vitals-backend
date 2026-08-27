@@ -142,4 +142,123 @@ export const reportsRepository = {
       take: limit,
     });
   },
+
+  // ── The asynchronous lifecycle ────────────────────────────────────────
+
+  /** A request, before anything has been rendered. */
+  createPending(data: {
+    personId: string;
+    generatedByUserId: string;
+    periodStart: Date;
+    periodEnd: Date;
+  }) {
+    return prisma.reportGeneration.create({ data, select: GENERATION_VIEW });
+  },
+
+  generationById(id: string) {
+    return prisma.reportGeneration.findUnique({
+      where: { id },
+      select: { ...GENERATION_VIEW, generatedByUserId: true, storageKey: true },
+    });
+  },
+
+  /**
+   * Take ownership of a pending row, or report that someone already has.
+   *
+   * The conditional update is the claim: only a row still PENDING moves to
+   * PROCESSING, and `count` says whether this caller was the one that moved
+   * it. BullMQ already delivers a job once, but a queue replayed after a flush
+   * — or a job retried after the process died mid-render — can arrive at a row
+   * that is no longer waiting, and rendering one health summary twice is worth
+   * one cheap guard.
+   */
+  async claimForRendering(id: string): Promise<boolean> {
+    const { count } = await prisma.reportGeneration.updateMany({
+      where: { id, status: 'PENDING' },
+      data: { status: 'PROCESSING' },
+    });
+    return count === 1;
+  },
+
+  markReady(id: string, storageKey: string, expiresAt: Date) {
+    return prisma.reportGeneration.update({
+      where: { id },
+      data: { status: 'READY', storageKey, expiresAt, completedAt: new Date() },
+      select: GENERATION_VIEW,
+    });
+  },
+
+  markFailed(id: string, failureReason: string) {
+    return prisma.reportGeneration.update({
+      where: { id },
+      data: { status: 'FAILED', failureReason, completedAt: new Date() },
+      select: GENERATION_VIEW,
+    });
+  },
+
+  /**
+   * Record that a copy left the system.
+   *
+   * Only the first fetch is stamped. The ledger's question is whether this
+   * Person's history left, not how many times the reader pressed the button,
+   * and overwriting it on every download would lose the moment it happened.
+   */
+  async markDownloaded(id: string): Promise<void> {
+    await prisma.reportGeneration.updateMany({
+      where: { id, downloadedAt: null },
+      data: { downloadedAt: new Date() },
+    });
+  },
+
+  /** READY rows whose document is due for deletion. */
+  dueForExpiry(now: Date, limit = 200) {
+    return prisma.reportGeneration.findMany({
+      where: { status: 'READY', expiresAt: { lte: now } },
+      select: { id: true, storageKey: true },
+      take: limit,
+    });
+  },
+
+  /**
+   * Move a swept row to EXPIRED.
+   *
+   * `storageKey` is cleared at the same time: the file is gone, and a key
+   * pointing at nothing invites a later reader to believe otherwise.
+   */
+  async markExpired(id: string): Promise<void> {
+    await prisma.reportGeneration.updateMany({
+      where: { id, status: 'READY' },
+      data: { status: 'EXPIRED', storageKey: null },
+    });
+  },
+
+  /** Every key a row still claims, for detecting files nothing owns. */
+  async liveStorageKeys(): Promise<Set<string>> {
+    const rows = await prisma.reportGeneration.findMany({
+      where: { storageKey: { not: null } },
+      select: { storageKey: true },
+    });
+    return new Set(rows.map((row) => row.storageKey!));
+  },
 };
+
+/**
+ * What a caller may see about a generation.
+ *
+ * `storageKey` is deliberately absent: it names a file on the server and no
+ * client has any use for it. It is selected explicitly where the server needs
+ * it, and nowhere else.
+ */
+const GENERATION_VIEW = {
+  id: true,
+  personId: true,
+  kind: true,
+  status: true,
+  periodStart: true,
+  periodEnd: true,
+  generatedAt: true,
+  completedAt: true,
+  expiresAt: true,
+  downloadedAt: true,
+  failureReason: true,
+} as const;

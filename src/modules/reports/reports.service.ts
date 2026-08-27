@@ -1,32 +1,65 @@
 import { AppError } from '@/lib/errors';
 import { createLogger } from '@/lib/logger';
+import { env } from '@/config/env';
 import { personAccess } from '@/modules/person/person.access';
 import { entitlementService } from '@/modules/billing/entitlement.service';
+import {
+  reportsQueue,
+  JOB_NAMES,
+  type GenerateHealthSummaryPayload,
+} from '@/queues/queue.registry';
 import { reportsRepository, type ReportPeriod } from './reports.repository';
+import { renderHealthSummary } from './reports.pdf';
+import {
+  newStorageKey,
+  openWriteStream,
+  openReadStream,
+  fileSize,
+  deleteFile,
+  orphanedFiles,
+} from './reports.storage';
 
 const log = createLogger('reports');
 
 /**
  * Health summaries.
  *
- * ── Why this is not a background job ─────────────────────────────────────
+ * ── Why this IS a background job, and what that cost ─────────────────────
  *
- * Project rule: long-running work goes to the BullMQ worker rather than the
- * request path. It does not apply here, and the reason is worth writing down
- * so this is not "fixed" later into something worse.
+ * This file used to argue the opposite, and the argument was right about the
+ * risk while being wrong about the machine. It is kept in outline because the
+ * risk did not go away by being accepted.
  *
- * That rule exists to keep slow work off the request path. Rendering one
- * Person's summary with PDFKit is a few dozen database rows laid out as text —
- * it is not slow, and there is no long-running work to move. Making it a job
- * would not remove work from the request; it would add a stored artifact, and
- * that artifact is the problem: a PDF holding a Person's entire health record,
- * duplicated outside the tables that own it and outside every access check
- * that guards them, sitting somewhere until someone remembers to delete it.
+ * The objection was never that rendering is fast or slow. It was that making
+ * it a job adds a stored artifact — a PDF holding one Person's entire health
+ * record, duplicated outside the tables that own it and outside every access
+ * check that guards them, sitting somewhere until someone remembers to delete
+ * it. That is still exactly what a stored report is.
  *
- * So the document is streamed and nothing is kept. If a future summary really
- * does become slow — years of data, images, many Persons at once — the answer
- * is to stream it in pages, or to accept a job whose output is deleted on a
- * timer. It is not to quietly start storing health records.
+ * What changed is where this runs: a 1 GB instance on which the API and the
+ * worker share a single Node process. PDFKit rendering is the most CPU-hungry
+ * thing that process does, and on the request path it competes with every
+ * other request for the same event loop — including the reminder engine.
+ * "Slow" was never the danger; blocking was.
+ *
+ * The earlier note named the escape hatch and this is it, taken deliberately:
+ * "accept a job whose output is deleted on a timer. It is not to quietly start
+ * storing health records." So the timer is not a follow-up task. Nothing in
+ * this module can produce a file without an expiry:
+ *
+ *   * expiresAt is written in the same update that sets READY
+ *   * the sweep deletes the file and moves the row to EXPIRED
+ *   * files nothing owns are swept too, so a crash mid-render cannot leave a
+ *     health record on disk with no row tracking its deletion
+ *
+ * ── Downloads are authorised, not addressed ──────────────────────────────
+ *
+ * A signed storage URL was the obvious way to serve these and is deliberately
+ * not used. Such a URL is a bearer capability: it keeps working after the
+ * membership that justified it is revoked, because nothing re-reads the
+ * membership. Access here is resolved from the database on *every* download,
+ * so revocation takes effect between two fetches of the same document. The
+ * storage key never leaves the server and is not part of any response.
  *
  * ── Two gates, resolved separately ───────────────────────────────────────
  *
@@ -296,4 +329,248 @@ export const reportsService = {
     const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
     return reportsRepository.listGenerations(personId);
   },
+
+  // ── Asynchronous generation ───────────────────────────────
+
+  /**
+   * Accept a request for a summary. Renders nothing.
+   *
+   * Both gates are resolved here, in the same order and for the same reasons
+   * as before: access first, so a caller with no relationship to a Person is
+   * told that rather than invited to upgrade. Checking them now means an
+   * unauthorised request is refused immediately instead of being queued and
+   * failing out of sight — and the worker checks again anyway, because the
+   * answer can change while the job waits.
+   */
+  async requestHealthSummary(
+    userId: string,
+    requestedPersonId: string | undefined,
+    period: ReportPeriod,
+  ) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+
+    const tier = await entitlementService.tierFor(userId);
+    if (tier !== 'PREMIUM') {
+      throw AppError.forbidden('Generating a health summary is a Premium feature.');
+    }
+
+    if (period.end < period.start) {
+      throw AppError.badRequest('The end of the period must be after its start');
+    }
+
+    const generation = await reportsRepository.createPending({
+      personId,
+      generatedByUserId: userId,
+      periodStart: period.start,
+      periodEnd: period.end,
+    });
+
+    await reportsQueue.add(
+      JOB_NAMES.GENERATE_HEALTH_SUMMARY,
+      { reportGenerationId: generation.id } satisfies GenerateHealthSummaryPayload,
+      { jobId: generation.id },
+    );
+
+    log.info('Health summary requested', {
+      userId,
+      personId,
+      reportGenerationId: generation.id,
+    });
+
+    return generation;
+  },
+
+  /**
+   * Where a request has got to.
+   *
+   * Access is re-resolved rather than compared against who asked: a caregiver
+   * who can read the Person can see that a summary of that Person was taken,
+   * which is the same visibility `listGenerations` already gives.
+   */
+  async generationStatus(userId: string, reportGenerationId: string) {
+    const generation = await reportsRepository.generationById(reportGenerationId);
+    if (!generation) throw AppError.notFound('Report not found');
+
+    await personAccess.assertPersonAccess(userId, generation.personId, 'read');
+
+    const { generatedByUserId: _byUser, storageKey: _key, ...view } = generation;
+    return view;
+  },
+
+  /**
+   * Authorise a download and hand back what the route needs to stream it.
+   *
+   * Every gate is checked again here, on every fetch. Being the account that
+   * asked for the document earns nothing: membership can be revoked and
+   * Premium can lapse between generating a summary and fetching it, and in
+   * both cases the fetch must fail. This is the check a signed URL would have
+   * skipped.
+   */
+  async prepareDownload(userId: string, reportGenerationId: string) {
+    const generation = await reportsRepository.generationById(reportGenerationId);
+    if (!generation) throw AppError.notFound('Report not found');
+
+    await personAccess.assertPersonAccess(userId, generation.personId, 'read');
+
+    const tier = await entitlementService.tierFor(userId);
+    if (tier !== 'PREMIUM') {
+      throw AppError.forbidden('Generating a health summary is a Premium feature.');
+    }
+
+    if (generation.status === 'FAILED') {
+      throw AppError.badRequest(
+        generation.failureReason ?? 'That summary could not be generated.',
+      );
+    }
+
+    if (generation.status === 'PENDING' || generation.status === 'PROCESSING') {
+      throw AppError.badRequest('That summary is still being prepared.');
+    }
+
+    // Expired, or expired-but-not-yet-swept. Both are gone as far as a reader
+    // is concerned, and a sweep running late must not extend anyone's access.
+    const storageKey = generation.storageKey;
+    const expired =
+      generation.status === 'EXPIRED' ||
+      storageKey === null ||
+      (generation.expiresAt !== null && generation.expiresAt <= new Date());
+
+    if (expired || storageKey === null) {
+      throw AppError.gone(
+        'That summary has expired. Generating another one takes a moment.',
+      );
+    }
+
+    // The row says READY but the file is not there — a restart cleared the
+    // directory, or the disk was swept from under it. Correct the row so it
+    // stops advertising something that cannot be served.
+    const size = await fileSize(storageKey);
+    if (size === null) {
+      await reportsRepository.markExpired(generation.id);
+      throw AppError.gone(
+        'That summary has expired. Generating another one takes a moment.',
+      );
+    }
+
+    const person = await reportsRepository.person(generation.personId);
+
+    await reportsRepository.markDownloaded(generation.id);
+
+    log.info('Health summary downloaded', {
+      userId,
+      personId: generation.personId,
+      reportGenerationId: generation.id,
+    });
+
+    return {
+      stream: openReadStream(storageKey),
+      sizeBytes: size,
+      filename: summaryFilename(person?.displayName ?? 'person', generation.periodEnd),
+    };
+  },
+
+  /**
+   * Render one accepted request. Called by the worker, never by a route.
+   *
+   * Returns false when another attempt already claimed the row, so the caller
+   * can treat a replayed job as done rather than as a failure.
+   */
+  async renderPending(reportGenerationId: string): Promise<boolean> {
+    const claimed = await reportsRepository.claimForRendering(reportGenerationId);
+    if (!claimed) return false;
+
+    const generation = await reportsRepository.generationById(reportGenerationId);
+    if (!generation) throw new Error('Report generation row disappeared mid-render');
+
+    // The account that asked may have been erased while the job waited, which
+    // SET NULL allows. There is then nobody whose access can be re-resolved,
+    // and rendering on behalf of no one is exactly what must not happen.
+    if (!generation.generatedByUserId) {
+      await reportsRepository.markFailed(
+        reportGenerationId,
+        'The account that requested this summary no longer exists.',
+      );
+      return true;
+    }
+
+    const storageKey = newStorageKey();
+
+    try {
+      // Re-resolves membership and entitlement. Access lost while the job sat
+      // in the queue fails it here rather than producing a document nobody is
+      // entitled to.
+      const summary = await reportsService.buildHealthSummary(
+        generation.generatedByUserId,
+        generation.personId,
+        { start: generation.periodStart, end: generation.periodEnd },
+      );
+
+      const stream = await openWriteStream(storageKey);
+
+      await new Promise<void>((resolve, reject) => {
+        stream.on('error', reject);
+        stream.on('finish', () => resolve());
+        renderHealthSummary(summary, stream);
+      });
+
+      const expiresAt = new Date(Date.now() + env.REPORT_TTL_MINUTES * 60_000);
+      await reportsRepository.markReady(reportGenerationId, storageKey, expiresAt);
+
+      log.info('Health summary rendered', {
+        reportGenerationId,
+        personId: generation.personId,
+        expiresAt: expiresAt.toISOString(),
+      });
+    } catch (err: any) {
+      // Half a health record on disk with no row pointing at it is the worst
+      // outcome available here, so the file goes before the row is updated.
+      await deleteFile(storageKey);
+      await reportsRepository.markFailed(
+        reportGenerationId,
+        err?.message ?? 'The summary could not be generated.',
+      );
+      throw err;
+    }
+
+    return true;
+  },
+
+  /**
+   * Delete documents whose time is up, and any file no row owns.
+   *
+   * The orphan pass is the one that matters for the promise this module makes.
+   * A row is only updated after its file is complete, so a crash in between
+   * leaves a health record on disk that no expiry covers. Nothing else would
+   * ever remove it.
+   */
+  async sweepExpiredDocuments(): Promise<{ expired: number; orphans: number }> {
+    const due = await reportsRepository.dueForExpiry(new Date());
+
+    for (const row of due) {
+      if (row.storageKey) await deleteFile(row.storageKey);
+      await reportsRepository.markExpired(row.id);
+    }
+
+    const liveKeys = await reportsRepository.liveStorageKeys();
+    const orphans = await orphanedFiles(liveKeys);
+    for (const name of orphans) await deleteFile(name);
+
+    if (due.length > 0 || orphans.length > 0) {
+      log.info('Report documents swept', { expired: due.length, orphans: orphans.length });
+    }
+
+    return { expired: due.length, orphans: orphans.length };
+  },
+};
+
+/**
+ * The filename a reader sees. Derived from the Person and the period, so a
+ * folder of these is sortable and tells the reader which is which.
+ */
+export const summaryFilename = (displayName: string, periodEnd: Date): string => {
+  const slug = displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `vitals-summary-${slug}-${periodEnd.toISOString().slice(0, 10)}.pdf`;
 };

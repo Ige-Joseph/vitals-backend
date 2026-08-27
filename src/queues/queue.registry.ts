@@ -17,6 +17,7 @@ export const QUEUE_NAMES = {
   ADHERENCE: 'adherence',
   OUTBOX: 'outbox',
   BILLING: 'billing',
+  REPORTS: 'reports',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -41,6 +42,9 @@ export const JOB_NAMES = {
 
   // Billing queue
   PROCESS_BILLING_EVENT: 'PROCESS_BILLING_EVENT',
+
+  // Reports queue
+  GENERATE_HEALTH_SUMMARY: 'GENERATE_HEALTH_SUMMARY',
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -151,6 +155,19 @@ export interface SendMoodPromptPushPayload {
   userId: string;
 }
 
+/**
+ * The generation row id, and nothing else.
+ *
+ * Same reasoning as the billing payload above: the requester, the subject, the
+ * period and the attempt count all live on the row, which outlives Redis. It
+ * also matters here for a second reason — the subject of a clinical query must
+ * not be readable off a queue payload, where nothing re-checks who asked for
+ * it. The worker loads the row and resolves access again.
+ */
+export interface GenerateHealthSummaryPayload {
+  reportGenerationId: string;
+}
+
 // ─────────────────────────────────────────────
 // Queue instances
 // ─────────────────────────────────────────────
@@ -159,6 +176,22 @@ export const adherenceQueue = new Queue(QUEUE_NAMES.ADHERENCE, defaultQueueOptio
 export const outboxQueue = new Queue(QUEUE_NAMES.OUTBOX, defaultQueueOptions);
 export const billingQueue = new Queue(QUEUE_NAMES.BILLING, defaultQueueOptions);
 
+/**
+ * Rendering is the most CPU-hungry thing this process does, and on the target
+ * instance the API shares its event loop. Jobs are queued at a lower priority
+ * than the rest so a backlog of summaries yields to reminders and billing,
+ * which are time-critical in a way a document nobody is waiting on is not.
+ */
+export const reportsQueue = new Queue(QUEUE_NAMES.REPORTS, {
+  ...defaultQueueOptions,
+  defaultJobOptions: {
+    ...defaultQueueOptions.defaultJobOptions,
+    priority: 10,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+  },
+});
+
 // Graceful shutdown helper
 export const closeQueues = async () => {
   await Promise.all([
@@ -166,5 +199,6 @@ export const closeQueues = async () => {
     adherenceQueue.close(),
     outboxQueue.close(),
     billingQueue.close(),
+    reportsQueue.close(),
   ]);
 };

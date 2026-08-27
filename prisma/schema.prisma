@@ -1062,6 +1062,20 @@ enum ReportKind {
   HEALTH_SUMMARY
 }
 
+/// Where a requested summary has got to.
+///
+/// READY means a file exists and can still be fetched. EXPIRED means the
+/// request completed and the file has since been swept — the record of the
+/// generation survives the document deliberately, because the consent ledger
+/// is about what left the system, not about what is still downloadable.
+enum ReportStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+  EXPIRED
+}
+
 /// That a report was generated — and deliberately nothing else.
 ///
 /// There is no file column here, and that is the design rather than an
@@ -1095,13 +1109,36 @@ model ReportGeneration {
   periodStart DateTime
   periodEnd   DateTime
 
+  /// When the summary was *asked for*. Under the earlier synchronous contract
+  /// this was also the moment it left the system; it no longer is, so the two
+  /// facts are recorded separately — see downloadedAt.
   generatedAt DateTime @default(now())
+
+  status ReportStatus @default(PENDING)
+
+  /// Opaque filename of the rendered document while it exists. Null before the
+  /// job runs and after the sweep; never a path the client sees or supplies.
+  storageKey String?
+
+  /// When rendering finished, and when the file stops being fetchable.
+  completedAt DateTime?
+  expiresAt   DateTime?
+
+  /// When a copy first actually left the system. This is the consent-ledger
+  /// fact under NDPA, and it is the download that constitutes it — generating
+  /// a document nobody fetched did not disclose anything.
+  downloadedAt DateTime?
+
+  /// Why rendering failed, for a reader who can no longer see the job.
+  failureReason String?
 
   person      Person @relation(fields: [personId], references: [id], onDelete: Restrict)
   generatedBy User?  @relation("ReportGeneratedBy", fields: [generatedByUserId], references: [id], onDelete: SetNull)
 
   @@index([personId, generatedAt])
   @@index([generatedByUserId, generatedAt])
+  /// Drives the expiry sweep: find READY rows whose expiresAt has passed.
+  @@index([status, expiresAt])
   @@map("report_generations")
 }
 

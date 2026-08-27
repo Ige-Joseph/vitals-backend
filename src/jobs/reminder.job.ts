@@ -4,6 +4,7 @@ import { reminderEngine } from '@/modules/care/reminder.engine';
 import { outboxService } from '@/modules/outbox/outbox.service';
 import { reconciliationService } from '@/modules/billing/reconciliation.service';
 import { appointmentsService } from '@/modules/appointments/appointments.service';
+import { reportsService } from '@/modules/reports/reports.service';
 import { createLogger } from '@/lib/logger';
 import { env } from '@/config/env';
 
@@ -14,6 +15,7 @@ const REMINDER_JOB = 'PROCESS_DUE_REMINDERS';
 const RECONCILE_JOB = 'billing-reconcile';
 const OUTBOX_JOB = 'PROCESS_OUTBOX';
 const APPOINTMENT_SWEEP_JOB = 'SWEEP_MISSED_APPOINTMENTS';
+const REPORT_SWEEP_JOB = 'SWEEP_EXPIRED_REPORTS';
 
 // Dedicated queue for the scheduler — separate from the notifications queue
 export const reminderSchedulerQueue = new Queue(REMINDER_QUEUE, {
@@ -46,6 +48,11 @@ export const reminderSchedulerWorker = new Worker(
     if (job.name === APPOINTMENT_SWEEP_JOB) {
       log.debug('Appointment sweep tick');
       await appointmentsService.sweepMissed();
+    }
+
+    if (job.name === REPORT_SWEEP_JOB) {
+      log.debug('Report expiry sweep tick');
+      await reportsService.sweepExpiredDocuments();
     }
   },
   { connection: redisConnection, concurrency: 1 },
@@ -91,6 +98,22 @@ export const startScheduledJobs = async (): Promise<void> => {
     },
   );
 
+  // Expired health summaries — every five minutes by default.
+  //
+  // This is the timer the whole asynchronous design rests on. A rendered
+  // summary is one Person's entire record sitting outside the tables that own
+  // it, and the only thing that removes it is this job. If it stops running,
+  // documents accumulate indefinitely — so it is registered beside the others
+  // rather than left to a cron nobody redeploys.
+  await reminderSchedulerQueue.add(
+    REPORT_SWEEP_JOB,
+    {},
+    {
+      repeat: { every: env.REPORT_SWEEP_INTERVAL_MS },
+      jobId: 'report-sweep-tick',
+    },
+  );
+
   // Outbox poller — every 30 seconds
   await reminderSchedulerQueue.add(
     OUTBOX_JOB,
@@ -102,7 +125,12 @@ export const startScheduledJobs = async (): Promise<void> => {
   );
 
   log.info('Scheduled jobs registered', {
-    jobs: ['reminder-engine (60s)', 'outbox-poller (30s)', 'appointment-sweep'],
+    jobs: [
+      'reminder-engine (60s)',
+      'outbox-poller (30s)',
+      'appointment-sweep',
+      'report-sweep',
+    ],
   });
 };
 

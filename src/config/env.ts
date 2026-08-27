@@ -72,6 +72,22 @@ const envSchema = z
     /// Failed billing events older than this are dead-lettered.
     BILLING_EVENT_MAX_ATTEMPTS: z.coerce.number().default(5),
 
+    // Reports
+    //
+    // Health summaries are rendered by a worker and held as a file until the
+    // reader fetches them. Both settings bound how long one Person's whole
+    // record sits outside the tables that own it, so they are deliberately
+    // short: the document is a hand-off, not an archive.
+    //
+    // The directory is not persisted across container restarts on purpose. A
+    // lost file costs a regeneration; a file surviving a restart is a health
+    // record outliving the process that was accountable for deleting it.
+    REPORT_STORAGE_DIR: z.string().default('/tmp/vitals-reports'),
+    /// How long a rendered summary stays fetchable before the sweep deletes it.
+    REPORT_TTL_MINUTES: z.coerce.number().int().positive().default(60),
+    /// How often the sweep looks for expired documents.
+    REPORT_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(300000),
+
     // Billing
     // How long a failed renewal keeps Premium. Runs from the failed charge,
     // not from the period end.
