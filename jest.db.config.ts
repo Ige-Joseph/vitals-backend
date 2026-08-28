@@ -41,6 +41,19 @@ const config: Config = {
   // Raising this will produce cross-test interference, not speed.
   maxWorkers: 1,
 
+  // Recycle the worker when it gets heavy.
+  //
+  // maxWorkers: 1 means every suite runs in the same process, and Jest does not
+  // fully release a suite's module registry when it moves to the next one. With
+  // ts-jest compiling two dozen suites that accumulates, and the run died at
+  // Node's ~4 GB heap ceiling once the suite count grew — an out-of-memory
+  // crash rather than a test failure, which is a confusing thing to debug.
+  //
+  // Restarting the worker between suites costs a little startup time and bounds
+  // the growth. It does not weaken isolation: each suite already truncates
+  // every table, so a fresh process is if anything cleaner.
+  workerIdleMemoryLimit: '1GB',
+
   testTimeout: 30_000,
   clearMocks: true,
   verbose: true,

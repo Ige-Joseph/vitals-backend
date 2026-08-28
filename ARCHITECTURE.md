@@ -265,12 +265,19 @@ without putting a vendor's field name in the schema.
 
 ### 3. `Entitlement` — resolved, never stored
 
-The answer to "what can this account do", computed from subscription state:
+The answer to "what can this account do", computed from **two** independent
+facts — a paid subscription and an `EntitlementGrant` — with the higher tier
+winning:
 
 ```
 tier + managedPersonLimit + connectionLimit
 source: 'subscription' | 'grant' | 'default'
 ```
+
+There is exactly one calculation, `entitlementService.effective()`, and
+`tierFor` and `resolve` are two shapes of it. That is not tidiness: when they
+were two calculations they disagreed, and an admin-granted account was refused
+by the one the UI read while being served by the one every gate used.
 
 `PAST_DUE` still grants — losing access to a dependent's records the day a card
 expires is the wrong failure — bounded by a grace window running from the failed
@@ -279,17 +286,39 @@ Both are bounded, so neither grants forever.
 
 ### 4. `PlanType` — a projection, not the answer
 
-The column on `User`. The money is the fact; a column that disagrees with it is
-a bug waiting to be believed. Quota reads entitlement rather than the access
-token, so an upgrade takes effect on the next request instead of the next
+The column on `User`. **Nothing authorises against it.** It is written through
+whenever entitlement changes and survives for three reasons — the access token
+carries it, the admin user list displays it, and older reads expect it — none
+of which are authorisation.
+
+This is load-bearing. Reading it in the resolver would make it a second source
+of truth, which is the bug the grant model replaced. Quota and every gate read
+entitlement, so an upgrade takes effect on the next request instead of the next
 refresh.
 
-### 5. The grant — tops up, never reduces
+### 5. `EntitlementGrant` — Premium given rather than bought
 
-`User.managedPersonLimit` and `User.connectionLimit` are a manual grant — a
-support decision, a pilot account. Entitlement takes `Math.max` of the tier
-default and the grant, so a grant tops up rather than replaces and an expiring
-subscription cannot silently strip one given separately.
+A subscription is money; a grant is a decision. They are independent, neither
+writes the other, and an account can hold both — the resolver takes the higher
+tier and reports the subscription as the source while the grant stays live
+underneath. A failed card must not remove something nobody paid for.
+
+The row is the audit trail: who granted it, when, why, until when, and who
+revoked it and why. Revocation is recorded, never deleted — "this account had
+Premium for three months and then did not" is a fact about the account.
+
+**Expiry is not a status.** `GrantStatus` is `ACTIVE` or `REVOKED`, the states a
+person puts a grant into. A grant whose `expiresAt` has passed stops granting at
+that instant because the lookup is a `WHERE` clause, not because a sweep marked
+it. There is no job, and correctness does not wait for one.
+
+### The capacity grant — tops up, never reduces
+
+Separately, `User.managedPersonLimit` and `User.connectionLimit` can be raised
+directly for a support decision or a pilot account. Entitlement takes `Math.max`
+of the tier default and those columns, so raising them tops up rather than
+replaces, and an expiring subscription cannot silently strip capacity given
+separately.
 
 ### Two capacity axes, both zero on free
 
