@@ -1,0 +1,63 @@
+# Rehearse the production stack on this machine.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d --build
+#
+# An overlay, not a replacement. Everything that makes the production stack
+# what it is stays exactly as it is — the memory limits, the Redis flags, the
+# nginx config, the worker concurrencies, the heap cap. This file changes only
+# the three things that cannot be true on a laptop:
+#
+#   1. the image is built here rather than pulled from GHCR, which has nothing
+#      in it until CI has run
+#   2. ports move off 80/443, which are commonly taken on a desktop and need
+#      privileges on Linux
+#   3. Postgres is the local container rather than Supabase
+#
+# What that buys you is a genuine rehearsal of the things most likely to go
+# wrong on the VM: whether the image actually boots, whether migrations run on
+# start, whether nginx terminates TLS and forwards Origin correctly, whether
+# the workers come up beside the API, and whether the whole thing fits inside
+# the memory limits. None of that needs Oracle to find out.
+#
+# What it does NOT rehearse: Cloudflare, the real certificate, the two
+# firewalls, and Supabase latency. Those are VM-only and the runbook covers
+# them.
+
+services:
+  backend:
+    # Build instead of pull. The tag is kept identical to production so the
+    # compose file above needs no change and you are running the same
+    # Dockerfile the runner will.
+    build:
+      context: .
+    image: ghcr.io/ige-joseph/vitals-backend:latest
+    environment:
+      # The local Postgres from docker-compose.yml, reached from inside this
+      # container. host.docker.internal is the host as seen from a container on
+      # Docker Desktop; 5433 is the port that stack publishes.
+      #
+      # Deliberately not a link to the other compose project: keeping this
+      # stack's network separate is closer to the VM, where the database is
+      # somewhere else entirely.
+      DATABASE_URL: postgresql://postgres:local@host.docker.internal:5433/vitals
+      DIRECT_URL: postgresql://postgres:local@host.docker.internal:5433/vitals
+
+      # Where the browser reaches the app in this rehearsal. On the VM these
+      # are the Vercel domain and the api. subdomain.
+      FRONTEND_URL: https://localhost:8443
+      CORS_ORIGIN: https://localhost:8443,http://localhost:5173,http://localhost:4173
+      API_URL: https://localhost:8443
+    extra_hosts:
+      # Needed on Linux, harmless on Docker Desktop.
+      - "host.docker.internal:host-gateway"
+
+  edge:
+    # !override, not a plain list. Compose *appends* sequences when merging
+    # files, so without it this stack would publish 80, 443, 8443 and 8081 —
+    # still colliding with whatever holds 80 on your machine, which is the
+    # collision this overlay exists to avoid.
+    ports: !override
+      # The container still listens on 80/443 internally, so the nginx config
+      # under test is the production one, unmodified.
+      - "8443:443"
+      - "8081:80"

@@ -33,13 +33,20 @@
 # of the kernel choosing a victim — and on a box this size the victim it
 # chooses is usually the API.
 
+# The project name prefixes every container: vitals-backend-1, vitals-redis-1,
+# vitals-edge-1.
+#
+# Deliberately no container_name on the services. Fixed names collide with the
+# development stack, which also calls its Redis "vitals-redis" — so rehearsing
+# this stack locally failed outright until they were removed. Compose-generated
+# names are unique per project, and every command in the runbook addresses
+# services by name rather than container, so nothing depends on the old ones.
 name: vitals
 
 services:
   # ── TLS termination and the only published ports ──────────────────────
   edge:
     image: nginx:1.27-alpine
-    container_name: vitals-edge
     restart: unless-stopped
     depends_on:
       backend:
@@ -64,7 +71,6 @@ services:
   # ── The API and every worker, in one process ──────────────────────────
   backend:
     image: ghcr.io/ige-joseph/vitals-backend:latest
-    container_name: vitals-backend
     restart: unless-stopped
     depends_on:
       redis:
@@ -121,7 +127,6 @@ services:
   # ── Queues. Not a cache. ──────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: vitals-redis
     restart: unless-stopped
     # Not published. Redis has no password here because it is reachable only
     # from the compose network — publishing it would need one immediately.
