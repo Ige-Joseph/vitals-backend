@@ -166,6 +166,18 @@ blocks until its healthcheck passes, which is what you want in a script.
 The database is the same `vitals-pgdata` volume the host loop uses, so data
 carries across between the two ways of running.
 
+**This is not the production stack.** `docker-compose.prod.yml` is what runs on
+the server — three containers, memory limits, TLS, and no Postgres because
+Supabase provides it. It can be rehearsed here with an overlay that builds the
+image locally instead of pulling it:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d --build
+```
+
+See [`docs/DEPLOYMENT_ORACLE.md`](docs/DEPLOYMENT_ORACLE.md) for the two files
+it needs first and what the rehearsal does and does not prove.
+
 ### Migrations
 
 ```bash

@@ -28,6 +28,60 @@ concurrent PDF renders, so those limits are headroom rather than a target.
 
 ---
 
+## Rehearse it locally first
+
+Everything below can be tried on your own machine before the VM exists. Worth
+doing: the failures it catches — an image that does not boot, migrations that
+do not run, nginx not forwarding `Origin` — are exactly the ones that are
+miserable to debug over SSH on a box with 1 GB of RAM.
+
+```bash
+# 1. a certificate to stand in for the Cloudflare origin certificate
+mkdir -p deploy/certs
+docker run --rm -v "$(pwd)/deploy/certs:/out" alpine/openssl \
+  req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /out/origin.key -out /out/origin.pem -subj "/CN=localhost"
+
+# 2. an environment file — .env is a fine starting point locally
+cp .env .env.production
+
+# 3. the database the rehearsal points at
+docker compose up -d --wait postgres
+
+# 4. the production stack, built here instead of pulled
+docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml \
+  up -d --build
+```
+
+Then, deliberately using **https** and `-k`, because the certificate is
+self-signed and your machine has no reason to trust it:
+
+```bash
+curl -k https://localhost:8443/api/v1/health
+docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml \
+  logs backend | grep -i "scheduled jobs"
+docker stats --no-stream
+```
+
+The overlay changes only three things: the image is built rather than pulled,
+the ports move to 8443/8081, and Postgres is the local container instead of
+Supabase. The memory limits, Redis flags, nginx config, heap cap and worker
+concurrencies are the production ones, unmodified — that is the point.
+
+**What this does not rehearse:** Cloudflare, the real certificate, both
+firewalls, and Supabase latency. Those are VM-only, and the rest of this
+document is about them.
+
+```bash
+# done
+docker compose -f docker-compose.prod.yml -f docker-compose.prod.local.yml down
+```
+
+Note that `.env.production` and `deploy/certs/` are both gitignored. That is not
+tidiness — without it the first person to run this commits a TLS private key.
+
+---
+
 ## One-time setup
 
 ### 1. Swap, before anything else
@@ -189,6 +243,29 @@ free -h
 Expect `"status":"healthy"` with `database` and `redis` both `ok`, and the
 scheduled-jobs line listing `reminder-engine`, `outbox-poller`,
 `appointment-sweep` and `report-sweep`.
+
+### Then reboot it, once, on purpose
+
+Oracle reboots instances for maintenance whether or not you have tested for it,
+and a single instance has nothing to fail over to. Finding out that the stack
+does not come back on its own is much better done now than at 3am.
+
+```bash
+sudo systemctl is-enabled docker      # must say "enabled"
+sudo reboot
+
+# after it comes back
+docker ps                             # all three, without being told to start
+free -h                               # swap still attached
+sudo iptables -L INPUT -n | head      # rules survived, if you saved them
+curl -s https://api.your-domain.com/api/v1/health
+```
+
+Every container is `restart: unless-stopped`, so this works provided Docker
+itself starts at boot. The three things that most often do not survive a first
+reboot are the swap file (missing `/etc/fstab` entry), the iptables rules
+(never saved with `netfilter-persistent`), and Docker being installed but not
+enabled.
 
 ---
 
