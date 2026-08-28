@@ -34,6 +34,7 @@ const DOCS = [
   'docs/API_PERFORMANCE.md',
   'docs/AUTHENTICATION.md',
   'docs/DEPLOYMENT.md',
+  'docs/DEPLOYMENT_ORACLE.md',
   'docs/MOBILE_API.md',
   'docs/MOBILE_CLIENT.md',
 ];
@@ -102,6 +103,16 @@ for (const doc of Object.keys(text)) {
     if (url.includes('vitals_test') || url.includes('vitals_shadow')) continue;
     // CI's throwaway values are not instructions to a developer.
     if (url.includes('postgres@localhost') || url.includes(':5432/vitals_test')) continue;
+
+    // A managed database is legitimately not the local one. This check exists
+    // to keep documented *local* connection details in step with
+    // docker-compose.yml; a URL pointing at a hosted provider — Supabase in
+    // the production runbook — is outside its scope, and holding it to the
+    // local port and database name would be wrong rather than strict.
+    const host = (url.match(/@([^:/\s]+)/) || [])[1] || '';
+    if (host && host !== 'localhost' && host !== '127.0.0.1' && host.includes('.')) {
+      continue;
+    }
 
     if (devPort && !url.includes(`:${devPort}/`)) {
       fail(doc, `Postgres URL should use host port ${devPort}: ${url}`);

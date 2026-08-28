@@ -21,6 +21,10 @@ separate: `Ige-Joseph/vitals-backend` and `Ige-Joseph/vitals-frontend`.
 
 ### The agreed target topology — decided, not yet deployed
 
+> The runbook for actually doing this is
+> [`DEPLOYMENT_ORACLE.md`](DEPLOYMENT_ORACLE.md): swap, both firewalls, the
+> Cloudflare origin certificate, and the first deploy.
+
 This is a **decision record**, not a description of what is running. Everything
 above is what is live today; everything here is where it is going.
 
