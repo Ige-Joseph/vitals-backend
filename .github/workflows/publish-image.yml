@@ -1,0 +1,90 @@
+name: Publish image
+
+# Builds the production image and pushes it to GitHub Container Registry.
+#
+# The deployment target is a 1 GB Oracle instance. `npm ci` followed by `tsc`
+# is comfortably the heaviest thing that machine would ever be asked to do, and
+# it would either thrash swap or be OOM-killed partway through. So the image is
+# built here, where the runner has 16 GB, and the VM only ever pulls it.
+#
+# This runs only after CI passes on main. A green typecheck, an OpenAPI check,
+# a docs check and the test suite are the gate; publishing a broken image the
+# VM will happily pull is not a failure mode worth having.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  # Manual runs, for redeploying an unchanged commit.
+  workflow_dispatch:
+
+concurrency:
+  group: publish-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+
+    # Only when CI actually succeeded. workflow_run fires on failure too.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    permissions:
+      contents: read
+      # Required to push to ghcr.io as GITHUB_TOKEN. Without it the push fails
+      # with a 403 that reads like a credential problem.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # `latest` is what the VM pulls; the sha tag is what you roll back to.
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The Oracle shape is VM.Standard.E2.1.Micro — AMD, x86. No ARM
+          # build is needed, and adding one would double build time for an
+          # architecture nothing runs.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Image published" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "On the VM:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "cd ~/vitals-backend" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose -f docker-compose.prod.yml pull" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose -f docker-compose.prod.yml up -d" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
