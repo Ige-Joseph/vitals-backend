@@ -89,12 +89,21 @@ export const entitlementService = {
     const [user, subscription] = await Promise.all([
       prisma.user.findUniqueOrThrow({
         where: { id: userId },
-        select: { managedPersonLimit: true, connectionLimit: true },
+        select: { managedPersonLimit: true, connectionLimit: true, planType: true },
       }),
       entitlementService.activeSubscription(userId),
     ]);
 
-    const tier = (subscription?.price.tier ?? 'FREE') as BillingTier;
+    // Same precedence as tierFor: a subscription is the fact, and planType is
+    // the projection an admin grant writes.
+    //
+    // This used to read the subscription alone, which made an admin-granted
+    // account report FREE here while every gate — all of which go through
+    // tierFor — served it as PREMIUM. The account was entitled and told it was
+    // not: the upgrade prompt showed, the feature worked if called directly.
+    // Two functions answering "what tier is this account" differently is the
+    // bug; keeping them in step is the fix.
+    const tier = (subscription?.price.tier ?? user.planType ?? 'FREE') as BillingTier;
     const base = TIER_ENTITLEMENTS[tier];
 
     // The columns on User are a manual grant — a support decision, a pilot
@@ -108,9 +117,13 @@ export const entitlementService = {
       user.managedPersonLimit > base.managedPersonLimit ||
       user.connectionLimit > base.connectionLimit;
 
+    // `grant` now covers both shapes a manual grant can take: raised capacity
+    // columns, and a planType lifted without a subscription behind it. Before,
+    // a tier-only grant reported `default`, which read as "this account is on
+    // the free tier by nature" rather than "someone gave this to them".
     const source: EntitlementSource = subscription
       ? 'subscription'
-      : grantExceedsTier
+      : grantExceedsTier || tier !== 'FREE'
         ? 'grant'
         : 'default';
 
@@ -140,6 +153,9 @@ export const entitlementService = {
 
     // No subscription: fall back to the projection, which the admin grant path
     // writes. Removing this would make a manual grant stop granting.
+    //
+    // `resolve` applies the same precedence deliberately. If these two ever
+    // disagree again, an account is entitled by one and refused by the other.
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { planType: true },
