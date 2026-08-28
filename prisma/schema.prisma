@@ -362,6 +362,10 @@ model User {
   /// Provenance only: reports this account generated.
   reportGenerations ReportGeneration[] @relation("ReportGeneratedBy")
 
+  entitlementGrants   EntitlementGrant[] @relation("GrantSubject")
+  entitlementsGranted EntitlementGrant[] @relation("GrantGrantedBy")
+  entitlementsRevoked EntitlementGrant[] @relation("GrantRevokedBy")
+
   @@map("users")
 }
 
@@ -833,6 +837,76 @@ model PaymentTransaction {
 /// and the work durable — the same shape as the outbox, pointed inward. A
 /// provider that does not get a fast 200 will retry, and retries are exactly
 /// what the uniqueness below makes harmless.
+/// Why a grant was given. Distinguishes a support decision from a campaign,
+/// which is the difference between "we owed them this" and "we were running an
+/// offer" when someone asks six months later.
+enum GrantSource {
+  ADMIN
+  PROMOTION
+  SUPPORT
+}
+
+/// The states a grant is *put into*. Expiry is not one of them.
+///
+/// A grant with a past `expiresAt` stops granting the moment that time passes,
+/// whether or not anything has run since. Adding EXPIRED here would invite a
+/// reader to trust the column, and a column is only as current as the job that
+/// writes it — which for entitlement is the wrong thing to depend on.
+enum GrantStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// Premium given rather than bought.
+///
+/// A subscription is money; this is a decision. They are independent and
+/// neither writes the other: a lapsed card must not remove something that was
+/// never bought, and a promotional grant must not look like revenue.
+///
+/// This exists because the alternative — setting `User.planType` and leaving it
+/// — is unauditable. It records nothing about who decided, when, why, or for
+/// how long, and there is no way to tell a permanent decision from one someone
+/// meant to reverse.
+model EntitlementGrant {
+  id     String @id @default(uuid())
+  userId String
+
+  /// What was granted. Only PREMIUM is meaningful today; the column is typed
+  /// against PlanType so a future tier needs no migration here.
+  tier   PlanType    @default(PREMIUM)
+  source GrantSource @default(ADMIN)
+  status GrantStatus @default(ACTIVE)
+
+  /// Null means it runs until revoked. A date means it stops on its own, and
+  /// that is evaluated when entitlement is read rather than by a sweep.
+  expiresAt DateTime?
+
+  /// Required. A tier change nobody can explain later is the thing this model
+  /// exists to prevent.
+  reason String
+
+  /// SetNull rather than Cascade: erasing the admin who made the decision must
+  /// not erase that the decision was made.
+  grantedByUserId String?
+  grantedAt       DateTime @default(now())
+
+  revokedByUserId String?
+  revokedAt       DateTime?
+  revokedReason   String?
+
+  user      User  @relation("GrantSubject", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User? @relation("GrantGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  revokedBy User? @relation("GrantRevokedBy", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+
+  /// The entitlement lookup: one account's currently-granting rows. Every
+  /// person-facing request that touches a paid feature runs this, so it is the
+  /// index that matters.
+  @@index([userId, status, expiresAt])
+  /// The admin history view, newest first.
+  @@index([userId, grantedAt])
+  @@map("entitlement_grants")
+}
+
 model BillingWebhookEvent {
   id       String          @id @default(uuid())
   provider PaymentProvider
