@@ -7,6 +7,7 @@ import { createApp } from '@/app';
 import { env } from '@/config/env';
 import { prisma } from '@/lib/prisma';
 import { reportsService } from '@/modules/reports/reports.service';
+import { grantService } from '@/modules/billing/grant.service';
 import { enqueuedJobs, clearEnqueuedJobs } from './stubs/queues.stub';
 import { createUser, authHeader, type TestUser } from './helpers/factories';
 
@@ -259,7 +260,14 @@ describe('downloading is authorised every time', () => {
     const user = await premium();
     const id = await generateReady(user);
 
-    await prisma.user.update({ where: { id: user.id }, data: { planType: 'FREE' } });
+    // Premium lapses by the grant ending, not by the column changing.
+    // `planType` is a projection nothing authorises against, so lowering it
+    // here would assert nothing — the download would still succeed.
+    await grantService.revoke({
+      userId: user.id,
+      reason: 'entitlement ended',
+      actorUserId: user.id,
+    });
 
     const res = await request(app)
       .get(`/api/v1/reports/health-summary/${id}/download`)

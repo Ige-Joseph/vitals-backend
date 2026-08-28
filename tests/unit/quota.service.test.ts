@@ -7,9 +7,12 @@ jest.mock('@/lib/prisma', () => ({
     // The tier is read from the database now, not from the access token, so a
     // token minted before an upgrade cannot serve stale limits.
     user: { findUnique: jest.fn() },
-    // Entitlement resolves from subscription state; no subscription means the
-    // tier falls back to the projection on User.
+    // Entitlement resolves from two independent facts: a paid subscription and
+    // an admin grant. Neither is `User.planType`, which is a projection nothing
+    // authorises against — so a premium account here is one with a grant, not
+    // one with a column set.
     subscription: { findFirst: jest.fn().mockResolvedValue(null) },
+    entitlementGrant: { findFirst: jest.fn().mockResolvedValue(null) },
 
     dailyUsage: {
       upsert: jest.fn(),
@@ -30,8 +33,19 @@ const prismaError = (code: string) => Object.assign(new Error(code), { code });
 const mockUser = (prisma as any).user as { findUnique: jest.Mock };
 
 /** Set the tier the database will report for the account under test. */
-const onTier = (planType: 'FREE' | 'PREMIUM') =>
-  mockUser.findUnique.mockResolvedValue({ planType });
+/**
+ * Put the account on a tier the way the resolver actually reads one.
+ *
+ * PREMIUM means an active grant. Setting `planType` would no longer do
+ * anything: the resolver does not read it, which is the point of the grant
+ * model and worth the test exercising rather than working around.
+ */
+const onTier = (tier: 'FREE' | 'PREMIUM') => {
+  mockUser.findUnique.mockResolvedValue({ planType: tier });
+  (prisma as any).entitlementGrant.findFirst.mockResolvedValue(
+    tier === 'PREMIUM' ? { id: 'grant-1', tier: 'PREMIUM', expiresAt: null } : null,
+  );
+};
 
 describe('quotaService.checkAndIncrement', () => {
   beforeEach(() => {

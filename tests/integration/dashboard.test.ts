@@ -20,6 +20,9 @@ jest.mock('@/lib/prisma', () => ({
     // Entitlement resolves from subscription state; no subscription means the
     // tier falls back to the projection on User.
     subscription: { findFirst: jest.fn().mockResolvedValue(null) },
+    // No grant either: this account is genuinely FREE, by both of the facts
+    // that can grant Premium.
+    entitlementGrant: { findFirst: jest.fn().mockResolvedValue(null) },
 
     person: {
       findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }),

@@ -38,6 +38,22 @@ export async function createUser(
     },
   });
 
+  // Premium is no longer a column an account simply has. It is granted — by a
+  // subscription, or by an EntitlementGrant — and nothing authorises against
+  // `planType` any more. A factory that only set the column would produce
+  // accounts that look Premium and are refused by every gate, so it opens a
+  // real grant and lets the resolver do its job.
+  if ((overrides.planType ?? 'FREE') === 'PREMIUM') {
+    await prisma.entitlementGrant.create({
+      data: {
+        userId: user.id,
+        tier: 'PREMIUM',
+        source: 'ADMIN',
+        reason: 'test fixture',
+      },
+    });
+  }
+
   // Mirror signup: every account gets a self-Person and an OWNER membership.
   // Without this the factory would produce accounts that cannot exist in
   // production, and person-scoped reads would have nothing to resolve.
