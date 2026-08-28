@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { env } from '@/config/env';
 
 import { redisConnection } from '@/lib/redis';
 import { createLogger } from '@/lib/logger';
@@ -51,7 +52,7 @@ export const reportsWorker = new Worker(
       });
     }
   },
-  { connection: redisConnection, concurrency: 1 },
+  { connection: redisConnection, concurrency: env.WORKER_CONCURRENCY_REPORTS },
 );
 
 reportsWorker.on('failed', (job, err) => {

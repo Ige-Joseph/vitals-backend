@@ -73,7 +73,7 @@ export const billingWorker = new Worker(
       throw err;
     }
   },
-  { connection: redisConnection, concurrency: 5 },
+  { connection: redisConnection, concurrency: env.WORKER_CONCURRENCY_BILLING },
 );
 
 billingWorker.on('failed', (job, err) => {

@@ -72,6 +72,23 @@ const envSchema = z
     /// Failed billing events older than this are dead-lettered.
     BILLING_EVENT_MAX_ATTEMPTS: z.coerce.number().default(5),
 
+    // Worker concurrency
+    //
+    // How many jobs each worker runs at once, in a process that also serves the
+    // API. The defaults suit a multi-core host and are deliberately unchanged;
+    // the reason they are settings at all is the 1 OCPU deployment target,
+    // where 15 concurrent job slots on one core means jobs competing with
+    // requests for the only event loop there is.
+    //
+    // Lower these together with nothing else: they do not change what runs,
+    // only how much of it runs at once.
+    WORKER_CONCURRENCY_NOTIFICATIONS: z.coerce.number().int().positive().default(5),
+    WORKER_CONCURRENCY_BILLING: z.coerce.number().int().positive().default(5),
+    WORKER_CONCURRENCY_ADHERENCE: z.coerce.number().int().positive().default(3),
+    /// Rendering is the most CPU-hungry job there is. Raising this above 1 on a
+    /// shared-process deployment is how you stall the API.
+    WORKER_CONCURRENCY_REPORTS: z.coerce.number().int().positive().default(1),
+
     // Reports
     //
     // Health summaries are rendered by a worker and held as a file until the

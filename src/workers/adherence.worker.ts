@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { env } from '@/config/env';
 import { redisConnection } from '@/lib/redis';
 import {
   QUEUE_NAMES,
@@ -142,7 +143,7 @@ export const adherenceWorker = new Worker(
   },
   {
     connection: redisConnection,
-    concurrency: 3,
+    concurrency: env.WORKER_CONCURRENCY_ADHERENCE,
   },
 );
 
