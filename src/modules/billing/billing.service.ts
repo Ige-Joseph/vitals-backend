@@ -3,6 +3,7 @@ import { AppError } from '@/lib/errors';
 import { env } from '@/config/env';
 import { createLogger } from '@/lib/logger';
 import { entitlementService } from './entitlement.service';
+import { grantService } from './grant.service';
 import { checkoutService } from './checkout.service';
 import { providerRegistry } from './provider/provider.registry';
 import {
@@ -159,35 +160,44 @@ export const billingService = {
    * An account that drops below its limit keeps every Person it already has;
    * health data must never become read-only because a subscription lapsed.
    */
+  /**
+   * Grant or revoke Premium, as an admin.
+   *
+   * Kept as "set the plan" because that is what an admin is doing and what the
+   * route is called, but it no longer writes `planType` and walks away. PREMIUM
+   * opens an EntitlementGrant; FREE revokes the one that is running. Either way
+   * there is a row saying who decided, when, why, and — if it was time-limited
+   * — until when.
+   *
+   * Subscriptions are untouched by both. An admin cannot cancel someone's
+   * subscription from here, and revoking a grant leaves what they paid for
+   * exactly as it was.
+   */
   async setPlan(input: {
     userId: string;
     tier: BillingTier;
     actorUserId: string;
     basis: string;
+    expiresAt?: Date | null;
   }) {
-    const { userId, tier, actorUserId, basis } = input;
+    const { userId, tier, actorUserId, basis, expiresAt } = input;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, planType: true, erasedAt: true },
-    });
-
-    if (!user) throw AppError.notFound('User not found');
-    if (user.erasedAt) throw AppError.conflict('This account has been erased');
-
-    if (user.planType === tier) {
-      throw AppError.conflict(`This account is already on the ${tier} plan`);
+    if (tier === 'PREMIUM') {
+      await grantService.grant({
+        userId,
+        tier,
+        reason: basis,
+        expiresAt: expiresAt ?? null,
+        actorUserId,
+      });
+    } else {
+      await grantService.revoke({ userId, reason: basis, actorUserId });
     }
 
-    const entitlements = TIER_ENTITLEMENTS[tier];
-
-    const updated = await prisma.user.update({
+    // Read back through the projection the grant service just synced, so the
+    // response describes the account as every other read will see it.
+    return prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      data: {
-        planType: tier,
-        managedPersonLimit: entitlements.managedPersonLimit,
-        connectionLimit: entitlements.connectionLimit,
-      },
       select: {
         id: true,
         email: true,
@@ -200,15 +210,6 @@ export const billingService = {
         connectionLimit: true,
       },
     });
-
-    log.info('Billing tier changed', {
-      userId,
-      from: user.planType,
-      to: tier,
-      actorUserId,
-      basis,
-    });
-
-    return updated;
   },
+
 };

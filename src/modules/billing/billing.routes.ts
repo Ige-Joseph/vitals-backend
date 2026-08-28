@@ -5,6 +5,7 @@ import { authenticate, requireAdmin } from '@/middleware/auth.middleware';
 import { AuthenticatedRequest } from '@/types/express';
 import { ok, validationError } from '@/lib/response';
 import { billingService } from './billing.service';
+import { grantService } from './grant.service';
 import { checkoutService } from './checkout.service';
 import { prisma } from '@/lib/prisma';
 
@@ -111,8 +112,13 @@ const startCheckoutSchema = z.object({
 
 const setPlanSchema = z.object({
   tier: z.enum(['FREE', 'PREMIUM']),
-  /** Why this changed — recorded in the log, not guessed at later. */
+  /** Why this changed — recorded on the grant, not guessed at later. */
   basis: z.string().min(1).max(200).default('admin-action'),
+  /**
+   * Optional, and only meaningful when granting. Omitted means the grant runs
+   * until an admin revokes it.
+   */
+  expiresAt: z.coerce.date().optional(),
 });
 
 /**
@@ -563,9 +569,56 @@ router.patch(
         tier: parsed.data.tier,
         actorUserId: req.user!.sub,
         basis: parsed.data.basis,
+        expiresAt: parsed.data.expiresAt ?? null,
       });
 
       return ok(res, user, `Plan set to ${parsed.data.tier}`);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * @swagger
+ * /billing/users/{userId}/entitlement:
+ *   get:
+ *     tags: [Billing]
+ *     summary: (Admin) One account's entitlement, and why it has it
+ *     description: |
+ *       Answers "why does this account have Premium" without opening the
+ *       database: the effective tier and where it comes from, the subscription
+ *       if there is one, the grant currently running if there is one, and the
+ *       history of everything granted before.
+ *
+ *       `effective` is the authoritative answer — the same calculation every
+ *       gate uses. `planTypeProjection` is the cached column, exposed so that a
+ *       drift between the two is visible rather than silent. They should always
+ *       agree.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: The account's entitlement and grant history
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: User not found
+ */
+router.get(
+  '/users/:userId/entitlement',
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const overview = await grantService.overview(String(req.params.userId));
+      return ok(res, overview, 'Entitlement retrieved');
     } catch (err) {
       next(err);
     }

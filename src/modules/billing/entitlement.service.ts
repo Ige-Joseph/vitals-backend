@@ -8,10 +8,22 @@ import { TIER_ENTITLEMENTS, type BillingTier } from '@/config/billing.config';
 /**
  * What an account is entitled to, resolved from what it is paying for.
  *
- * `User.planType` is no longer the answer. It is a cached projection of this,
- * kept so existing reads and the admin path keep working, but a subscription
- * is the fact and planType is a copy of it — and a copy can be stale in ways
- * that matter, because the money says one thing and the column says another.
+ * Two things grant it, and neither is `User.planType`:
+ *
+ *   * an active paid subscription
+ *   * an active EntitlementGrant — Premium given rather than bought
+ *
+ * The higher of the two wins, and both are read here. This is the only place
+ * that calculates it; `tierFor` and `resolve` are two shapes of one answer,
+ * because when they were two answers an admin-granted account was refused by
+ * one and served by the other.
+ *
+ * `User.planType` is a **projection** and is deliberately not read. It is
+ * written through on grant and revoke, and it survives for three reasons: the
+ * access token carries it, the admin user list displays it, and older reads
+ * expect it. None of those are authorisation. Reading it here would make it a
+ * second source of truth again, which is the bug this model replaced — so if
+ * you find yourself reaching for it in this file, that is the mistake.
  *
  * Entitlement is account-scoped. It is never resolved per Person: a Person
  * that granted capacity would be a thing you could buy more of by adding
@@ -19,6 +31,14 @@ import { TIER_ENTITLEMENTS, type BillingTier } from '@/config/billing.config';
  */
 
 /** Statuses that still grant. */
+/**
+ * Which tier wins when an account has more than one.
+ *
+ * A comparison rather than a precedence list, so a subscription and a grant
+ * can both be present without either silently erasing the other.
+ */
+const TIER_RANK: Record<BillingTier, number> = { FREE: 0, PREMIUM: 1 };
+
 const GRANTING = ['ACTIVE', 'PAST_DUE', 'CANCELED'] as const satisfies readonly SubscriptionStatus[];
 
 export type EntitlementSource = 'subscription' | 'grant' | 'default';
@@ -85,25 +105,76 @@ export const entitlementService = {
     });
   },
 
-  async resolve(userId: string): Promise<Entitlement> {
-    const [user, subscription] = await Promise.all([
-      prisma.user.findUniqueOrThrow({
-        where: { id: userId },
-        select: { managedPersonLimit: true, connectionLimit: true, planType: true },
-      }),
+  /**
+   * The grant currently granting, if any.
+   *
+   * Expiry is a `WHERE` clause, not a status. A grant whose `expiresAt` has
+   * passed stops granting at that instant, whether or not anything has run
+   * since — there is no sweep to fall behind, and no column to be stale.
+   *
+   * Newest first, so a re-grant supersedes an older one without needing the
+   * older one revoked first.
+   */
+  async activeGrant(userId: string) {
+    const now = new Date();
+
+    return prisma.entitlementGrant.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      orderBy: { grantedAt: 'desc' },
+      select: {
+        id: true,
+        tier: true,
+        source: true,
+        expiresAt: true,
+        grantedAt: true,
+        reason: true,
+      },
+    });
+  },
+
+  /**
+   * The one calculation. Everything else in this file is a shape of it.
+   *
+   * A subscription and a grant can both be present, and the answer is the
+   * higher tier rather than either one alone. `source` names what is carrying
+   * it: money first, because that is the fact with an invoice behind it, but
+   * the grant stays live underneath and takes over the moment the subscription
+   * lapses. A failed card must not remove something nobody paid for.
+   */
+  async effective(userId: string) {
+    const [subscription, grant] = await Promise.all([
       entitlementService.activeSubscription(userId),
+      entitlementService.activeGrant(userId),
     ]);
 
-    // Same precedence as tierFor: a subscription is the fact, and planType is
-    // the projection an admin grant writes.
-    //
-    // This used to read the subscription alone, which made an admin-granted
-    // account report FREE here while every gate — all of which go through
-    // tierFor — served it as PREMIUM. The account was entitled and told it was
-    // not: the upgrade prompt showed, the feature worked if called directly.
-    // Two functions answering "what tier is this account" differently is the
-    // bug; keeping them in step is the fix.
-    const tier = (subscription?.price.tier ?? user.planType ?? 'FREE') as BillingTier;
+    const subscriptionTier = (subscription?.price.tier ?? 'FREE') as BillingTier;
+    const grantTier = (grant?.tier ?? 'FREE') as BillingTier;
+    const tier = TIER_RANK[grantTier] > TIER_RANK[subscriptionTier] ? grantTier : subscriptionTier;
+
+    const source: EntitlementSource =
+      subscription && TIER_RANK[subscriptionTier] >= TIER_RANK[grantTier]
+        ? 'subscription'
+        : grant
+          ? 'grant'
+          : 'default';
+
+    return { tier, source, subscription, grant };
+  },
+
+  async resolve(userId: string): Promise<Entitlement> {
+    const [user, effective] = await Promise.all([
+      prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { managedPersonLimit: true, connectionLimit: true },
+      }),
+      entitlementService.effective(userId),
+    ]);
+
+    const { tier, subscription } = effective;
     const base = TIER_ENTITLEMENTS[tier];
 
     // The columns on User are a manual grant — a support decision, a pilot
@@ -117,15 +188,11 @@ export const entitlementService = {
       user.managedPersonLimit > base.managedPersonLimit ||
       user.connectionLimit > base.connectionLimit;
 
-    // `grant` now covers both shapes a manual grant can take: raised capacity
-    // columns, and a planType lifted without a subscription behind it. Before,
-    // a tier-only grant reported `default`, which read as "this account is on
-    // the free tier by nature" rather than "someone gave this to them".
-    const source: EntitlementSource = subscription
-      ? 'subscription'
-      : grantExceedsTier || tier !== 'FREE'
-        ? 'grant'
-        : 'default';
+    // Raised capacity columns are still a grant, even with no EntitlementGrant
+    // row behind them — they are set directly for pilot accounts and support
+    // cases. So `default` means "free, and nobody gave this account anything".
+    const source: EntitlementSource =
+      effective.source === 'default' && grantExceedsTier ? 'grant' : effective.source;
 
     return {
       tier,
@@ -148,18 +215,6 @@ export const entitlementService = {
    * upgrade takes effect on the next request instead of the next refresh.
    */
   async tierFor(userId: string): Promise<BillingTier> {
-    const subscription = await entitlementService.activeSubscription(userId);
-    if (subscription) return subscription.price.tier as BillingTier;
-
-    // No subscription: fall back to the projection, which the admin grant path
-    // writes. Removing this would make a manual grant stop granting.
-    //
-    // `resolve` applies the same precedence deliberately. If these two ever
-    // disagree again, an account is entitled by one and refused by the other.
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { planType: true },
-    });
-    return (user?.planType ?? 'FREE') as BillingTier;
+    return (await entitlementService.effective(userId)).tier;
   },
 };
