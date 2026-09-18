@@ -72,6 +72,53 @@ router.get(
 
 /**
  * @swagger
+ * /auth/google/native:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Sign in with a native Google ID token
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [idToken]
+ *             properties:
+ *               idToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Native Google sign-in successful
+ *       409:
+ *         description: Email already belongs to a password account
+ */
+router.post(
+  '/native',
+  authRateLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken : '';
+      const outcome = await googleAuthService.completeNativeSignIn(idToken);
+
+      if (outcome.status === 'EMAIL_ALREADY_REGISTERED') {
+        return res.status(409).json({
+          success: false,
+          data: { email: outcome.email },
+          message: 'This email already has a Vitals password account. Sign in with your password.',
+          errorCode: 'EMAIL_ALREADY_REGISTERED',
+        });
+      }
+
+      return ok(res, outcome, 'Google sign-in successful');
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * @swagger
  * /auth/google/callback:
  *   get:
  *     tags: [Auth]

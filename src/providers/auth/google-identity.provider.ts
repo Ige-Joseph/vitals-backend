@@ -42,6 +42,39 @@ const signInClient = () =>
     String(env.GOOGLE_AUTH_REDIRECT_URI),
   );
 
+const allowedAudiences = (): string[] => [
+  String(env.GOOGLE_CLIENT_ID),
+  ...(env.GOOGLE_MOBILE_CLIENT_IDS ?? '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean),
+];
+
+const identityFromIdToken = async (idToken: string): Promise<GoogleIdentity> => {
+  const ticket = await signInClient().verifyIdToken({
+    idToken,
+    audience: allowedAudiences(),
+  });
+
+  const payload = ticket.getPayload();
+
+  if (!payload?.sub) {
+    throw new Error('Google ID token carried no subject');
+  }
+
+  if (!payload.email) {
+    throw new Error('Google ID token carried no email address');
+  }
+
+  return {
+    sub: payload.sub,
+    email: payload.email.toLowerCase(),
+    emailVerified: payload.email_verified === true,
+    givenName: payload.given_name ?? null,
+    familyName: payload.family_name ?? null,
+  };
+};
+
 export const googleIdentityProvider = {
   /**
    * Whether sign-in is configured at all. The redirect URI is optional in env
@@ -86,27 +119,11 @@ export const googleIdentityProvider = {
       throw new Error('Google did not return an ID token');
     }
 
-    const ticket = await client.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: String(env.GOOGLE_CLIENT_ID),
-    });
+    return identityFromIdToken(tokens.id_token);
+  },
 
-    const payload = ticket.getPayload();
-
-    if (!payload?.sub) {
-      throw new Error('Google ID token carried no subject');
-    }
-
-    if (!payload.email) {
-      throw new Error('Google ID token carried no email address');
-    }
-
-    return {
-      sub: payload.sub,
-      email: payload.email.toLowerCase(),
-      emailVerified: payload.email_verified === true,
-      givenName: payload.given_name ?? null,
-      familyName: payload.family_name ?? null,
-    };
+  /** Verify an ID token produced by the native Android or iOS client. */
+  async verifyNativeIdToken(idToken: string): Promise<GoogleIdentity> {
+    return identityFromIdToken(idToken);
   },
 };

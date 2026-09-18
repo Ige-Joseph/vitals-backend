@@ -47,6 +47,77 @@ export type GoogleSignInOutcome =
 const unusablePasswordHash = async (): Promise<string> =>
   bcrypt.hash(crypto.randomBytes(32).toString('hex'), BCRYPT_ROUNDS);
 
+const resolveVerifiedIdentity = async (
+  identity: GoogleIdentity,
+): Promise<GoogleSignInOutcome> => {
+  if (!identity.emailVerified) {
+    throw AppError.badRequest(
+      'Your Google email address is not verified. Verify it with Google and try again.',
+    );
+  }
+
+  const existingLink = await oauthRepository.findByProviderAccount(
+    'GOOGLE',
+    identity.sub,
+  );
+
+  if (existingLink) {
+    if (!existingLink.user.isActive) {
+      throw AppError.forbidden(
+        'Your account has been deactivated. Please contact support.',
+      );
+    }
+
+    const tokens = await issueSessionForUser(existingLink.user);
+
+    return {
+      status: 'AUTHENTICATED',
+      created: false,
+      profileComplete: isProfileComplete(existingLink.user),
+      user: { id: existingLink.user.id, email: existingLink.user.email },
+      tokens,
+    };
+  }
+
+  const existingByEmail = await authRepository.findUserByEmail(identity.email);
+
+  if (existingByEmail) {
+    return { status: 'EMAIL_ALREADY_REGISTERED', email: identity.email };
+  }
+
+  const result = await prisma.$transaction(async (tx: PrismaTx) => {
+    const user = await createAccountWithSelfPerson(tx, {
+      email: identity.email,
+      passwordHash: await unusablePasswordHash(),
+      firstName: identity.givenName,
+      lastName: identity.familyName,
+      emailVerified: true,
+      basis: 'google-sign-in',
+    });
+
+    await oauthRepository.create(
+      {
+        userId: user.id,
+        provider: 'GOOGLE',
+        providerAccountId: identity.sub,
+        email: identity.email,
+      },
+      tx,
+    );
+
+    const tokens = await issueSessionForUser(user, tx);
+    return { user, tokens };
+  });
+
+  return {
+    status: 'AUTHENTICATED',
+    created: true,
+    profileComplete: isProfileComplete(result.user),
+    user: { id: result.user.id, email: result.user.email },
+    tokens: result.tokens,
+  };
+};
+
 /**
  * Whether the account has what Vitals actually requires.
  *
@@ -244,5 +315,28 @@ export const googleAuthService = {
       user: { id: result.user.id, email: result.user.email },
       tokens: result.tokens,
     };
+  },
+
+  /**
+   * Native clients receive an ID token directly from Google. It is verified
+   * server-side against the allow-listed Android/iOS audiences before the
+   * ordinary Vitals session is issued.
+   */
+  async completeNativeSignIn(idToken: string): Promise<GoogleSignInOutcome> {
+    if (!idToken || idToken.length > 10_000) {
+      throw AppError.badRequest('Invalid Google sign-in token');
+    }
+
+    let identity: GoogleIdentity;
+    try {
+      identity = await googleIdentityProvider.verifyNativeIdToken(idToken);
+    } catch (err: any) {
+      log.warn('Native Google ID token verification failed', {
+        error: err?.message,
+      });
+      throw AppError.badRequest('Could not verify your Google account. Please try again.');
+    }
+
+    return resolveVerifiedIdentity(identity);
   },
 };

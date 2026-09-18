@@ -154,6 +154,11 @@ const envSchema = z
     /// second redirect keeps booting; sign-in reports itself unavailable
     /// rather than the process refusing to start.
     GOOGLE_AUTH_REDIRECT_URI: z.string().url().optional(),
+
+    /// OAuth client ids issued for the native Android and iOS applications.
+    /// Comma-separated because Google gives each platform its own audience.
+    /// The web client id remains accepted for development and Expo web.
+    GOOGLE_MOBILE_CLIENT_IDS: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const hasUpstashUrl = !!data.UPSTASH_REDIS_URL;
