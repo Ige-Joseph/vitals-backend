@@ -9,6 +9,10 @@ jest.mock('@/lib/prisma', () => ({
     $disconnect: jest.fn(),
     $transaction: jest.fn(),
     user: { findUnique: jest.fn() },
+    // Dose times are wall-clock readings resolved against the account's zone,
+    // so schedule generation now reads the profile. Null here exercises the
+    // no-profile-row path, which falls back to the column's own default.
+    profile: { findUnique: jest.fn().mockResolvedValue(null) },
     carePlan: { create: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
     medication: {
       create: jest.fn(),

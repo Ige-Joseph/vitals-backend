@@ -111,6 +111,21 @@ export interface SendMedicationFallbackEmailPayload {
   scheduledFor: string;
 
   /**
+   * Which kind of care event failed to reach the device. Added when the push
+   * fallback stopped being medication-only — ANC visits and baby vaccinations
+   * now arrive here too, and calling all of them a medication would produce an
+   * email telling someone to take a dose of their antenatal appointment.
+   *
+   * Optional so that jobs enqueued before this field existed still drain; they
+   * are medication by definition, because nothing else could reach this queue
+   * when they were written.
+   */
+  eventType?: string;
+
+  /** The care event's own title, used for anything that is not a medication. */
+  title?: string;
+
+  /**
    * @deprecated Legacy enqueue shape. An email snapshot goes stale exactly
    * like a userId does — the address may have changed, or the account may
    * have been erased and the address freed for someone else.

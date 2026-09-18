@@ -125,6 +125,106 @@ const findRotationGraceReplacement = async (stored: {
   return null;
 };
 
+/**
+ * Create an account and the Person it is about, in one transaction.
+ *
+ * Extracted from `signup` when Google sign-in arrived, because the alternative
+ * was a second place that creates a User and a self-Person — and two of those
+ * is exactly how one of them ends up subtly different. §3 allows one shape for
+ * this, so there is one function that makes it.
+ *
+ * What it deliberately does *not* do is send email verification. That belongs
+ * to the password flow, where the address is a claim we have to test. A
+ * federated identity arrives with the address already verified by the provider,
+ * and mailing a link to confirm what Google just confirmed would be noise.
+ *
+ * `basis` is written to the access ledger and says how the account came to own
+ * its own record. It is the one thing the two callers disagree about.
+ */
+export const createAccountWithSelfPerson = async (
+  tx: PrismaTx,
+  data: {
+    email: string;
+    passwordHash: string;
+    firstName?: string | null;
+    lastName?: string | null;
+    gender?: string;
+    country?: string;
+    emailVerified?: boolean;
+    basis: string;
+  },
+) => {
+  const user = await authRepository.createUser(
+    {
+      email: data.email,
+      passwordHash: data.passwordHash,
+      firstName: data.firstName ?? undefined,
+      lastName: data.lastName ?? undefined,
+      emailVerified: data.emailVerified,
+    },
+    tx,
+  );
+
+  if (data.gender || data.country) {
+    await tx.profile.create({
+      data: {
+        userId: user.id,
+        ...(data.gender ? { gender: data.gender as any } : {}),
+        ...(data.country ? { country: data.country } : {}),
+      },
+    });
+  }
+
+  // Every account gets its own Person, eagerly. Uniformity is worth more
+  // than avoiding a row: it makes the single-account case a special case
+  // of the general one, so authorization has exactly one shape.
+  //
+  // A self-Person owns itself, so it consumes neither entitlement axis —
+  // the free tier at 0/0 means "self only", not "no access".
+  const selfPerson = await tx.person.create({
+    data: {
+      displayName:
+        [data.firstName, data.lastName].filter(Boolean).join(' ') || data.email,
+      ...(data.gender ? { gender: data.gender as any } : {}),
+      ownerUserId: user.id,
+      claimedAt: new Date(),
+      createdByUserId: user.id,
+      // Provenance, set once. Without it the column default (MANAGED)
+      // applies and every account's own record claims to be a dependent —
+      // wrong on its face, and read by the first-baby exemption and the
+      // person switcher.
+      origin: 'SELF',
+    },
+  });
+
+  await tx.personMembership.create({
+    data: {
+      personId: selfPerson.id,
+      userId: user.id,
+      role: 'OWNER',
+      status: 'ACTIVE',
+      receivesNotifications: true,
+      acceptedAt: new Date(),
+    },
+  });
+
+  await tx.personAccessEvent.create({
+    data: {
+      personId: selfPerson.id,
+      subjectUserId: user.id,
+      actorUserId: user.id,
+      action: 'CLAIMED',
+      role: 'OWNER',
+      basis: data.basis,
+    },
+  });
+
+  return user;
+};
+
+/** Session issuance, shared with the federated sign-in flow. One mechanism. */
+export const issueSessionForUser = issueTokenPair;
+
 export const authService = {
   async signup(data: {
     email: string;
@@ -150,68 +250,14 @@ export const authService = {
     );
 
     const result = await prisma.$transaction(async (tx: PrismaTx) => {
-      const user = await authRepository.createUser(
-        {
-          email: data.email,
-          passwordHash,
-          firstName: data.firstName,
-          lastName: data.lastName,
-        },
-        tx,
-      );
-
-      if (data.gender || data.country) {
-        await tx.profile.create({
-          data: {
-            userId: user.id,
-            ...(data.gender ? { gender: data.gender as any } : {}),
-            ...(data.country ? { country: data.country } : {}),
-          },
-        });
-      }
-
-      // Every account gets its own Person, eagerly. Uniformity is worth more
-      // than avoiding a row: it makes the single-account case a special case
-      // of the general one, so authorization has exactly one shape.
-      //
-      // A self-Person owns itself, so it consumes neither entitlement axis —
-      // the free tier at 0/0 means "self only", not "no access".
-      const selfPerson = await tx.person.create({
-        data: {
-          displayName:
-            [data.firstName, data.lastName].filter(Boolean).join(' ') || data.email,
-          ...(data.gender ? { gender: data.gender as any } : {}),
-          ownerUserId: user.id,
-          claimedAt: new Date(),
-          createdByUserId: user.id,
-          // Provenance, set once. Without it the column default (MANAGED)
-          // applies and every account's own record claims to be a dependent —
-          // wrong on its face, and read by the first-baby exemption and the
-          // person switcher.
-          origin: 'SELF',
-        },
-      });
-
-      await tx.personMembership.create({
-        data: {
-          personId: selfPerson.id,
-          userId: user.id,
-          role: 'OWNER',
-          status: 'ACTIVE',
-          receivesNotifications: true,
-          acceptedAt: new Date(),
-        },
-      });
-
-      await tx.personAccessEvent.create({
-        data: {
-          personId: selfPerson.id,
-          subjectUserId: user.id,
-          actorUserId: user.id,
-          action: 'CLAIMED',
-          role: 'OWNER',
-          basis: 'self-signup',
-        },
+      const user = await createAccountWithSelfPerson(tx, {
+        email: data.email,
+        passwordHash,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        gender: data.gender,
+        country: data.country,
+        basis: 'self-signup',
       });
 
       await authRepository.createVerificationToken(

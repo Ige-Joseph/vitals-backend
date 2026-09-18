@@ -75,4 +75,23 @@ export const emailService = {
 
     log.info('Medication fallback email sent', { to: options.to });
   },
+
+  /**
+   * The same fallback, for care events that are not medication — an ANC visit,
+   * a baby vaccination. Same adapter, same queue, same outbox row: this is the
+   * existing mechanism reaching more event types, not a second one.
+   */
+  async sendCareReminderFallbackEmail(options: {
+    to: string;
+    title: string;
+    scheduledFor: string;
+  }): Promise<void> {
+    await brevoAdapter.send({
+      to: options.to,
+      subject: `Reminder: ${options.title}`,
+      html: emailTemplates.careReminderFallback(options.title, options.scheduledFor),
+    });
+
+    log.info('Care reminder fallback email sent', { to: options.to });
+  },
 };

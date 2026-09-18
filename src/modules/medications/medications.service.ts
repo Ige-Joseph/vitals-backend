@@ -12,6 +12,7 @@ import { FrequencyKey } from '@/config/medication.config';
 import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
 import { calendarService } from '@/modules/calendar/calendar.service';
+import { DEFAULT_TIMEZONE, isValidTimeZone } from '@/lib/timezone';
 
 const log = createLogger('medications-service');
 
@@ -33,6 +34,52 @@ const parseDateOnly = (value: string, fieldName: string): Date => {
     throw AppError.badRequest(`Invalid ${fieldName}`);
   }
   return date;
+};
+
+/**
+ * Which clock "08:00" is read against.
+ *
+ * The account setting the schedule up, not the Person it is about: `timezone`
+ * lives on `Profile`, which is account-scoped, and a managed Person has no
+ * account and therefore no zone of its own. For a self-Person the two are the
+ * same account anyway, and for a dependent the caregiver's zone is both the
+ * only answer available and almost always the right one — they are typically
+ * in the same house.
+ *
+ * `Profile.timezone` is NOT NULL with a column default, so the only way to get
+ * nothing here is an account with no Profile row at all — signup creates one
+ * only when gender or country was supplied. Those accounts fall back to the
+ * same value the column would have given them rather than to the server's
+ * zone, which is what produced the drift this fixes.
+ */
+const resolveScheduleTimeZone = async (userId: string): Promise<string> => {
+  const profile = await prisma.profile.findUnique({
+    where: { userId },
+    select: { timezone: true },
+  });
+
+  const timeZone = profile?.timezone?.trim();
+
+  if (!timeZone) {
+    log.info('No profile timezone; using default for schedule generation', {
+      userId,
+      timeZone: DEFAULT_TIMEZONE,
+    });
+    return DEFAULT_TIMEZONE;
+  }
+
+  // A zone Intl does not recognise would throw inside the scheduler, half way
+  // through building a plan. Checked here so the fallback is a logged decision
+  // rather than a 500.
+  if (!isValidTimeZone(timeZone)) {
+    log.warn('Profile timezone is not a recognised IANA zone; using default', {
+      userId,
+      timeZone,
+    });
+    return DEFAULT_TIMEZONE;
+  }
+
+  return timeZone;
 };
 
 export const medicationsService = {
@@ -87,6 +134,8 @@ export const medicationsService = {
       throw AppError.badRequest('End date must be after or equal to start date');
     }
 
+    const timeZone = await resolveScheduleTimeZone(userId);
+
     const schedule = generateMedicationSchedule({
       medicationName: input.name,
       dosage: input.dosage,
@@ -95,6 +144,7 @@ export const medicationsService = {
       endDate,
       customTimes: input.customTimes,
       instructions: input.instructions,
+      timeZone,
     });
 
     log.info('Schedule generated', {

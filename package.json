@@ -31,7 +31,8 @@
     "verify:openapi": "node scripts/verify-openapi.js",
     "verify:docs": "node scripts/verify-docs.js",
     "db:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
-    "db:reset": "prisma migrate reset --force && npm run db:seed"
+    "db:reset": "prisma migrate reset --force && npm run db:seed",
+    "reconcile:medication-schedules": "ts-node -r tsconfig-paths/register scripts/reconcile-medication-schedules.ts"
   },
   "keywords": [],
   "author": "",

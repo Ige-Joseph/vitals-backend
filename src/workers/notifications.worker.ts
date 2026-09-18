@@ -150,17 +150,35 @@ export const notificationsWorker = new Worker(
           break;
         }
 
-        await emailService.sendMedicationFallbackEmail({
-          to,
-          medicationName: payload.medicationName,
-          scheduledFor: payload.scheduledFor,
-        });
+        // Medication keeps the email it always had, word for word. Anything
+        // else — an ANC visit, a baby vaccination — gets the neutral care
+        // template, because telling someone to "take" their antenatal
+        // appointment would be nonsense.
+        //
+        // A job with no eventType predates the fallback covering more than
+        // medication, so it is medication by construction.
+        const isMedication = !payload.eventType || payload.eventType === 'MEDICATION_DOSE';
+
+        if (isMedication) {
+          await emailService.sendMedicationFallbackEmail({
+            to,
+            medicationName: payload.medicationName,
+            scheduledFor: payload.scheduledFor,
+          });
+        } else {
+          await emailService.sendCareReminderFallbackEmail({
+            to,
+            title: payload.title ?? 'You have a care event due',
+            scheduledFor: payload.scheduledFor,
+          });
+        }
 
         await outboxRepository.markProcessed(payload.outboxEventId);
 
-        log.info('Medication fallback email job complete', {
+        log.info('Fallback email job complete', {
           jobId: job.id,
           reminderId: payload.reminderId,
+          eventType: payload.eventType ?? 'MEDICATION_DOSE',
         });
         break;
       }

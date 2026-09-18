@@ -366,7 +366,58 @@ model User {
   entitlementsGranted EntitlementGrant[] @relation("GrantGrantedBy")
   entitlementsRevoked EntitlementGrant[] @relation("GrantRevokedBy")
 
+  /// Federated identities that can sign in as this account. Separate from
+  /// CalendarIntegration, which is an *authorization* this account granted
+  /// after already being signed in. One is how you get in; the other is a
+  /// permission you hand over once you are.
+  oauthAccounts OAuthAccount[]
+
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Federated sign-in
+// ─────────────────────────────────────────────
+
+enum AuthProvider {
+  GOOGLE
+}
+
+/// A provider identity that authenticates as a Vitals account.
+///
+/// Keyed on the provider's stable subject id, never on the email address. A
+/// Google account's email can change, and two different people can hold the
+/// same address over time; `sub` is the only value Google promises is stable
+/// and unique for the life of the account. Storing the email alongside it is
+/// for display and support, and is never read to decide who someone is.
+///
+/// This is deliberately not merged into CalendarIntegration. That row holds a
+/// calendar.events grant belonging to an account that is already signed in —
+/// tokens we act with. This row holds no access tokens at all, because
+/// authentication is finished the moment the identity is verified and nothing
+/// afterwards calls Google on the user's behalf.
+model OAuthAccount {
+  id       String       @id @default(uuid())
+  userId   String
+  provider AuthProvider
+
+  /// The provider's `sub`. Unique per provider, and the only identity key.
+  providerAccountId String
+
+  /// What the provider said the address was when the link was made. Display
+  /// and support only — never an identity lookup.
+  email String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// One identity resolves to at most one account, and an account holds at
+  /// most one identity per provider.
+  @@unique([provider, providerAccountId])
+  @@unique([userId, provider])
+  @@map("oauth_accounts")
 }
 
 model RefreshToken {

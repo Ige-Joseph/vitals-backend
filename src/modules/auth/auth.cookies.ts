@@ -48,7 +48,7 @@ export const assertTrustedCookieAuthOrigin = (req: Request): void => {
   }
 };
 
-export const readRefreshCookie = (req: Request): string | undefined => {
+const readCookie = (req: Request, name: string): string | undefined => {
   const cookieHeader = req.headers.cookie;
   if (!cookieHeader) return undefined;
 
@@ -56,8 +56,7 @@ export const readRefreshCookie = (req: Request): string | undefined => {
     const separatorIndex = entry.indexOf('=');
     if (separatorIndex < 0) continue;
 
-    const name = entry.slice(0, separatorIndex).trim();
-    if (name !== REFRESH_COOKIE_NAME) continue;
+    if (entry.slice(0, separatorIndex).trim() !== name) continue;
 
     const value = entry.slice(separatorIndex + 1).trim();
     try {
@@ -70,6 +69,9 @@ export const readRefreshCookie = (req: Request): string | undefined => {
   return undefined;
 };
 
+export const readRefreshCookie = (req: Request): string | undefined =>
+  readCookie(req, REFRESH_COOKIE_NAME);
+
 export const setRefreshCookie = (res: Response, refreshToken: string): void => {
   res.cookie(REFRESH_COOKIE_NAME, refreshToken, cookieOptions());
 };
@@ -77,5 +79,46 @@ export const setRefreshCookie = (res: Response, refreshToken: string): void => {
 export const clearRefreshCookie = (res: Response): void => {
   const { maxAge: _maxAge, ...options } = cookieOptions();
   res.clearCookie(REFRESH_COOKIE_NAME, options);
+};
+
+// ─────────────────────────────────────────────
+// OAuth sign-in state
+// ─────────────────────────────────────────────
+
+export const OAUTH_STATE_COOKIE_NAME = 'vitals_oauth_state';
+
+/** Matches the 10-minute life of the signed state token it is paired with. */
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * `sameSite: 'lax'` rather than the refresh cookie's `'none'`.
+ *
+ * Lax cookies *are* sent on top-level GET navigations, which is exactly and
+ * only what Google's redirect back to us is. Anything stricter would drop the
+ * cookie and break the flow; anything looser would attach it to cross-site
+ * subrequests it has no business being on.
+ */
+const oauthStateCookieOptions = (): CookieOptions => ({
+  httpOnly: true,
+  secure: env.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: `${env.API_PREFIX}/auth/google`,
+  maxAge: OAUTH_STATE_MAX_AGE_MS,
+});
+
+export const setOAuthStateCookie = (res: Response, nonce: string): void => {
+  res.cookie(OAUTH_STATE_COOKIE_NAME, nonce, oauthStateCookieOptions());
+};
+
+export const readOAuthStateCookie = (req: Request): string | undefined =>
+  readCookie(req, OAUTH_STATE_COOKIE_NAME);
+
+/**
+ * Cleared on every callback, success or failure. A state nonce is single-use:
+ * leaving it live would let a captured callback URL be replayed.
+ */
+export const clearOAuthStateCookie = (res: Response): void => {
+  const { maxAge: _maxAge, ...options } = oauthStateCookieOptions();
+  res.clearCookie(OAUTH_STATE_COOKIE_NAME, options);
 };
 

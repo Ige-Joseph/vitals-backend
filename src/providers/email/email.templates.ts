@@ -126,6 +126,72 @@ export const emailTemplates = {
 </html>`;
   },
 
+  /**
+   * A care reminder that could not reach the device.
+   *
+   * Deliberately the same shell as `medicationFallback` — same header, same
+   * button, same footer — with only the wording that would be wrong for a
+   * non-medication event changed. Copying the layout beat parameterising the
+   * medication template, because the medication copy is the one thing that
+   * must not shift as a side effect of adding this.
+   *
+   * Says what is due and when, and nothing about what it is for. The title
+   * already carries as much as the notification did.
+   */
+  careReminderFallback(title: string, scheduledFor: string): string {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Care reminder</title>
+</head>
+<body style="margin:0;padding:0;background:#f9f9f9;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:40px 0;">
+        <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:#1a73e8;padding:32px 40px;">
+              <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700;">Vitals</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:40px;">
+              <h2 style="margin:0 0 16px;color:#111;font-size:20px;">Care reminder</h2>
+              <p style="margin:0 0 16px;color:#555;font-size:15px;line-height:1.6;">
+                This is a reminder about <strong>${title}</strong>,
+                scheduled for <strong>${scheduledFor}</strong>.
+              </p>
+              <p style="margin:0 0 24px;color:#555;font-size:15px;line-height:1.6;">
+                Open Vitals to see the details and mark it as done.
+              </p>
+              <a href="${env.FRONTEND_URL}/care"
+                style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:15px;font-weight:600;">
+                Open Vitals
+              </a>
+              <p style="margin:24px 0 0;color:#aaa;font-size:12px;">
+                You are receiving this because you have care reminders enabled in your Vitals account.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px 40px;background:#f9f9f9;border-top:1px solid #eee;">
+              <p style="margin:0;color:#aaa;font-size:12px;">
+                &copy; ${new Date().getFullYear()} Vitals. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+  },
+
   medicationFallback(medicationName: string, scheduledFor: string): string {
     return `
 <!DOCTYPE html>

@@ -136,6 +136,24 @@ const envSchema = z
     GOOGLE_CLIENT_ID: z.string().min(1),
     GOOGLE_CLIENT_SECRET: z.string().min(1),
     GOOGLE_REDIRECT_URI: z.string().url(),
+
+    /// Where Google returns the browser after *sign-in*, which is a different
+    /// redirect from the calendar one and must be registered separately with
+    /// Google. Two reasons it cannot be shared:
+    ///
+    ///  1. The two callbacks do different things. One creates a session; the
+    ///     other stores a calendar grant for a session that already exists.
+    ///  2. It must resolve through the *frontend* origin in production —
+    ///     `https://app.example/api/v1/auth/google/callback` — so that the
+    ///     Set-Cookie on the refresh cookie is first-party. Pointing it at the
+    ///     API host instead sets the cookie on a domain the app never calls
+    ///     directly, and the session silently fails to survive the redirect.
+    ///     See docs/API_TRANSPORT.md in vitals-frontend.
+    ///
+    /// Optional so that an existing deployment that has not registered the
+    /// second redirect keeps booting; sign-in reports itself unavailable
+    /// rather than the process refusing to start.
+    GOOGLE_AUTH_REDIRECT_URI: z.string().url().optional(),
   })
   .superRefine((data, ctx) => {
     const hasUpstashUrl = !!data.UPSTASH_REDIS_URL;
