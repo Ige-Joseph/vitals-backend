@@ -123,11 +123,21 @@ describe('1. push succeeds', () => {
 
       await reminderEngine.dispatchReminder({ id: 'rem-1' });
 
-      expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
-        'rem-1',
-        'SENT',
-        expect.anything(),
-      );
+      if (eventType === 'MEDICATION_DOSE') {
+        expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
+          'rem-1',
+          'SENT',
+          expect.anything(),
+          undefined,
+          { adherenceCheckDueAt: expect.any(Date) },
+        );
+      } else {
+        expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
+          'rem-1',
+          'SENT',
+          expect.anything(),
+        );
+      }
       expect(mockOutbox.create).not.toHaveBeenCalled();
     },
   );
@@ -135,6 +145,93 @@ describe('1. push succeeds', () => {
   it('schedules the +30 minute adherence chase for medication only', async () => {
     await reminderEngine.dispatchReminder({ id: 'rem-1' });
     expect(adherenceQueue.add).toHaveBeenCalledTimes(1);
+    expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
+      'rem-1',
+      'SENT',
+      expect.anything(),
+      undefined,
+      { adherenceCheckDueAt: expect.any(Date) },
+    );
+  });
+
+  it('sets the due time for partial push success', async () => {
+    mockPush.sendToUserTokens.mockResolvedValue({
+      sent: 1,
+      failed: 1,
+      invalidTokenIds: [],
+    });
+
+    await reminderEngine.dispatchReminder({ id: 'rem-1' });
+
+    expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
+      'rem-1',
+      'SENT',
+      expect.anything(),
+      undefined,
+      { adherenceCheckDueAt: expect.any(Date) },
+    );
+  });
+
+  it('sets the due time roughly one configured delay from now', async () => {
+    const before = Date.now() + 1800000;
+
+    await reminderEngine.dispatchReminder({ id: 'rem-1' });
+
+    const sentCall = mockRepo.updateReminderStatus.mock.calls.find(
+      (call) => call[4]?.adherenceCheckDueAt,
+    );
+    expect(sentCall).toBeDefined();
+    const dueAt = (sentCall![4] as { adherenceCheckDueAt: Date }).adherenceCheckDueAt;
+    expect(dueAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect(dueAt.getTime()).toBeLessThanOrEqual(before + 1000);
+  });
+
+  it('does not escape when the enqueue fails after the transaction', async () => {
+    (adherenceQueue.add as jest.Mock).mockRejectedValueOnce(new Error('redis unavailable'));
+
+    await expect(reminderEngine.dispatchReminder({ id: 'rem-1' })).resolves.toBeUndefined();
+    expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
+      'rem-1',
+      'SENT',
+      expect.anything(),
+      undefined,
+      { adherenceCheckDueAt: expect.any(Date) },
+    );
+  });
+
+  it('does not persist a due time when every medication push fails', async () => {
+    mockPush.sendToUserTokens.mockResolvedValue({
+      sent: 0,
+      failed: 2,
+      invalidTokenIds: [],
+    });
+
+    await reminderEngine.dispatchReminder({ id: 'rem-1' });
+
+    expect(mockRepo.updateReminderStatus).not.toHaveBeenCalledWith(
+      'rem-1',
+      'SENT',
+      expect.anything(),
+      undefined,
+      expect.objectContaining({ adherenceCheckDueAt: expect.anything() }),
+    );
+    expect(adherenceQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue after the SENT transaction fails', async () => {
+    mockRepo.updateReminderStatus.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+    mockOutbox.create.mockRejectedValueOnce(new Error('outbox unavailable'));
+
+    await expect(reminderEngine.dispatchReminder({ id: 'rem-1' })).resolves.toBeUndefined();
+    expect(adherenceQueue.add).not.toHaveBeenCalled();
+    expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith(
+      'rem-1',
+      'FAILED',
+      undefined,
+      expect.stringContaining('database unavailable'),
+    );
   });
 
   it.each(['ANC_VISIT', 'BABY_VACCINATION'])(
@@ -145,6 +242,13 @@ describe('1. push succeeds', () => {
       await reminderEngine.dispatchReminder({ id: 'rem-1' });
 
       expect(adherenceQueue.add).not.toHaveBeenCalled();
+      expect(mockRepo.updateReminderStatus).not.toHaveBeenCalledWith(
+        'rem-1',
+        'SENT',
+        expect.anything(),
+        undefined,
+        expect.objectContaining({ adherenceCheckDueAt: expect.anything() }),
+      );
     },
   );
 });
@@ -165,6 +269,13 @@ describe('2. push fails, fallback succeeds', () => {
         }),
       );
       expect(mockRepo.updateReminderStatus).toHaveBeenCalledWith('rem-1', 'SENT');
+      expect(mockRepo.updateReminderStatus).not.toHaveBeenCalledWith(
+        'rem-1',
+        'SENT',
+        expect.anything(),
+        undefined,
+        expect.objectContaining({ adherenceCheckDueAt: expect.anything() }),
+      );
     },
   );
 

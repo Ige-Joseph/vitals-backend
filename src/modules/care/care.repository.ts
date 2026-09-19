@@ -311,6 +311,7 @@ export const careRepository = {
     status: 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELLED',
     tx?: PrismaTx,
     errorMessage?: string,
+    extra?: { adherenceCheckDueAt?: Date },
   ) {
     const client = tx ?? prisma;
 
@@ -333,6 +334,9 @@ export const careRepository = {
           ? {
               errorMessage: null,
             }
+          : {}),
+        ...(extra?.adherenceCheckDueAt
+          ? { adherenceCheckDueAt: extra.adherenceCheckDueAt }
           : {}),
       },
     });

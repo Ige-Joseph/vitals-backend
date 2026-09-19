@@ -1,11 +1,20 @@
 import { prisma } from '@/lib/prisma';
 import { reminderEngine } from '@/modules/care/reminder.engine';
+import { careRepository } from '@/modules/care/care.repository';
+import { outboxRepository } from '@/modules/outbox/outbox.repository';
+import { pushProvider } from '@/providers/push/push.provider';
 // Imported by its own path rather than through `@/queues/queue.registry`:
 // the moduleNameMapper rewrites that alias at runtime but TypeScript still
 // checks it against the real registry, which has no `clearEnqueuedJobs`. Same
 // resolved file either way, so the engine and this test share one instance.
 import { clearEnqueuedJobs } from './stubs/queues.stub';
 import { createUser, type TestUser } from './helpers/factories';
+
+jest.mock('@/providers/push/push.provider', () => ({
+  pushProvider: {
+    sendToUserTokens: jest.fn(),
+  },
+}));
 
 /**
  * The reminder engine actually claims and dispatches.
@@ -28,7 +37,11 @@ import { createUser, type TestUser } from './helpers/factories';
  * dispatch and status write.
  */
 
-const dueReminder = async (user: TestUser, minutesAgo = 5) => {
+const dueReminder = async (
+  user: TestUser,
+  minutesAgo = 5,
+  eventType = 'MEDICATION_DOSE',
+) => {
   const person = await prisma.person.findFirstOrThrow({
     where: { ownerUserId: user.id },
   });
@@ -54,7 +67,7 @@ const dueReminder = async (user: TestUser, minutesAgo = 5) => {
   const careEvent = await prisma.careEvent.create({
     data: {
       carePlanId: carePlan.id,
-      eventType: 'MEDICATION_DOSE',
+      eventType,
       title: 'Amlodipine 5mg',
       description: 'Time for your dose',
       scheduledFor: new Date(Date.now() + 30 * 60_000),
@@ -77,6 +90,12 @@ const dueReminder = async (user: TestUser, minutesAgo = 5) => {
 
 beforeEach(() => {
   clearEnqueuedJobs();
+  (pushProvider.sendToUserTokens as jest.Mock).mockReset();
+  (pushProvider.sendToUserTokens as jest.Mock).mockResolvedValue({
+    sent: 1,
+    failed: 0,
+    invalidTokenIds: [],
+  });
 });
 
 describe('a due reminder is claimed and dispatched', () => {
@@ -112,6 +131,92 @@ describe('a due reminder is claimed and dispatched', () => {
     expect(outbox).toHaveLength(1);
     expect(outbox[0].status).toBe('PENDING');
     expect((outbox[0].payload as Record<string, unknown>).medicationName).toBe('Amlodipine');
+
+    const reminder = await prisma.reminder.findFirstOrThrow();
+    expect(reminder.adherenceCheckDueAt).toBeNull();
+    expect(reminder.adherenceCheckProcessedAt).toBeNull();
+  });
+
+  it('persists the adherence due time for a successful medication push', async () => {
+    const user = await createUser();
+    const { reminder } = await dueReminder(user);
+    await prisma.pushToken.create({
+      data: { userId: user.id, token: `token-${reminder.id}` },
+    });
+
+    const before = Date.now() + 1_800_000;
+    await reminderEngine.processDueReminders();
+
+    const after = await prisma.reminder.findUniqueOrThrow({ where: { id: reminder.id } });
+    expect(after.status).toBe('SENT');
+    expect(after.adherenceCheckDueAt).toBeInstanceOf(Date);
+    expect(after.adherenceCheckDueAt!.getTime()).toBeGreaterThanOrEqual(before - 2000);
+    expect(after.adherenceCheckDueAt!.getTime()).toBeLessThanOrEqual(before + 2000);
+    expect(after.adherenceCheckProcessedAt).toBeNull();
+  });
+
+  it('leaves the due time NULL for a non-medication push', async () => {
+    const user = await createUser();
+    const { reminder } = await dueReminder(user, 5, 'ANC_VISIT');
+    await prisma.pushToken.create({
+      data: { userId: user.id, token: `token-${reminder.id}` },
+    });
+
+    await reminderEngine.processDueReminders();
+
+    const after = await prisma.reminder.findUniqueOrThrow({ where: { id: reminder.id } });
+    expect(after.status).toBe('SENT');
+    expect(after.adherenceCheckDueAt).toBeNull();
+    expect(after.adherenceCheckProcessedAt).toBeNull();
+  });
+
+  it('rolls back SENT and the due time when the activity log fails', async () => {
+    const user = await createUser();
+    const { reminder } = await dueReminder(user);
+    await prisma.pushToken.create({
+      data: { userId: user.id, token: `token-${reminder.id}` },
+    });
+
+    const activityLogFailure = jest
+      .spyOn(careRepository, 'createActivityLog')
+      .mockRejectedValueOnce(new Error('activity log unavailable'));
+    const fallbackFailure = jest
+      .spyOn(outboxRepository, 'create')
+      .mockRejectedValueOnce(new Error('outbox unavailable'));
+
+    await reminderEngine.processDueReminders();
+
+    const after = await prisma.reminder.findUniqueOrThrow({ where: { id: reminder.id } });
+    expect(after.status).not.toBe('SENT');
+    expect(after.adherenceCheckDueAt).toBeNull();
+    expect(after.adherenceCheckProcessedAt).toBeNull();
+
+    activityLogFailure.mockRestore();
+    fallbackFailure.mockRestore();
+  });
+
+  it('has the durable adherence index in Postgres', async () => {
+    const columns = await prisma.$queryRaw<Array<{ column_name: string }>>`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'reminders'
+        AND column_name IN ('adherenceCheckDueAt', 'adherenceCheckProcessedAt')
+      ORDER BY column_name
+    `;
+    expect(columns.map((row) => row.column_name)).toEqual([
+      'adherenceCheckDueAt',
+      'adherenceCheckProcessedAt',
+    ]);
+
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'reminders'
+        AND indexname = 'reminders_adherence_due_idx'
+    `;
+    expect(indexes).toHaveLength(1);
   });
 
   it('picks up everything already overdue, not just the newest', async () => {

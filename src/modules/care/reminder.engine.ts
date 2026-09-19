@@ -303,8 +303,25 @@ export const reminderEngine = {
     log.info('Push reminder dispatched', { reminderId, sent, failed });
 
     if (sent > 0) {
+      const adherenceCheckDueAt =
+        careEvent.eventType === 'MEDICATION_DOSE'
+          ? new Date(Date.now() + env.ADHERENCE_CHECK_DELAY_MS)
+          : undefined;
+
       await prisma.$transaction(async (tx: PrismaTx) => {
-        await careRepository.updateReminderStatus(reminderId, 'SENT', tx);
+        if (adherenceCheckDueAt) {
+          await careRepository.updateReminderStatus(
+            reminderId,
+            'SENT',
+            tx,
+            undefined,
+            {
+              adherenceCheckDueAt,
+            },
+          );
+        } else {
+          await careRepository.updateReminderStatus(reminderId, 'SENT', tx);
+        }
 
         await careRepository.createActivityLog(
           {
@@ -317,29 +334,36 @@ export const reminderEngine = {
         );
       });
 
-      if (careEvent.eventType === 'MEDICATION_DOSE') {
-        await adherenceQueue.add(
-          JOB_NAMES.CHECK_MEDICATION_ADHERENCE,
-          {
-            reminderId,
-            careEventId: careEvent.id,
-            // Whose dose this is. Who to tell is resolved when the check runs,
-            // half an hour later, by which time the answer may have changed.
-            personId: careEvent.carePlan?.personId ?? undefined,
-            medicationName,
-            scheduledFor: careEvent.scheduledFor.toISOString(),
-          },
-          {
-            delay: env.ADHERENCE_CHECK_DELAY_MS,
-            jobId: `adherence-${reminderId}`,
-            attempts: 1,
-          },
-        );
+      if (adherenceCheckDueAt) {
+        try {
+          await adherenceQueue.add(
+            JOB_NAMES.CHECK_MEDICATION_ADHERENCE,
+            {
+              reminderId,
+              careEventId: careEvent.id,
+              // Whose dose this is. Who to tell is resolved when the check runs,
+              // half an hour later, by which time the answer may have changed.
+              personId: careEvent.carePlan?.personId ?? undefined,
+              medicationName,
+              scheduledFor: careEvent.scheduledFor.toISOString(),
+            },
+            {
+              delay: env.ADHERENCE_CHECK_DELAY_MS,
+              jobId: `adherence-${reminderId}`,
+              attempts: 1,
+            },
+          );
 
-        log.info('Adherence check scheduled', {
-          reminderId,
-          delayMs: env.ADHERENCE_CHECK_DELAY_MS,
-        });
+          log.info('Adherence check scheduled', {
+            reminderId,
+            delayMs: env.ADHERENCE_CHECK_DELAY_MS,
+          });
+        } catch (err: any) {
+          log.warn('Failed to enqueue adherence check; durable due row remains', {
+            reminderId,
+            error: err.message,
+          });
+        }
       }
 
       return;

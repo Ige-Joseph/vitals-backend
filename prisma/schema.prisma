@@ -1053,11 +1053,14 @@ model Reminder {
   updatedAt     DateTime        @updatedAt
   processedAt   DateTime?
   errorMessage  String?
+  adherenceCheckDueAt       DateTime?
+  adherenceCheckProcessedAt DateTime?
 
   careEvent            CareEvent             @relation(fields: [careEventId], references: [id], onDelete: Cascade)
   notificationAttempts NotificationAttempt[]
 
   @@index([status, sendAt])
+  @@index([status, adherenceCheckProcessedAt, adherenceCheckDueAt], map: "reminders_adherence_due_idx")
   @@map("reminders")
 }
 
