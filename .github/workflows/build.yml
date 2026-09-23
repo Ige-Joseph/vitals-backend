@@ -15,6 +15,20 @@ jobs:
     name: Typecheck, test, build
     runs-on: ubuntu-latest
 
+    # The adherence-recovery suite uses a real BullMQ queue. Keeping this
+    # beside the normal suite proves the client and Redis agree on retained-job
+    # behaviour, rather than only proving our mocks do.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6381:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
     # src/config/env.ts validates the environment at import time and calls
     # process.exit(1) when a required variable is missing, so every non-optional
     # variable needs a value here or nothing runs. These are throwaway values:

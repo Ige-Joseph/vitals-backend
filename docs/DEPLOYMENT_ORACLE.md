@@ -215,6 +215,32 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml logs -f backend
 ```
 
+## Continuous deployment after the first deploy
+
+GitHub Actions runs typechecking, unit tests, real Postgres tests, the real
+Redis/BullMQ recovery test, and a production image build for every main change.
+After a successful image publish, the `Deploy the published image to Oracle`
+job pulls that exact commit's immutable image tag and restarts the stack on the
+VM. It is intentionally skipped until the repository variable
+`ORACLE_DEPLOY_ENABLED` is set to `true`.
+
+Create a GitHub Environment named `production` and add these environment
+secrets before enabling it:
+
+- `ORACLE_HOST` — the VM public hostname or IP.
+- `ORACLE_USER` — the non-root SSH user that runs Docker (normally `ubuntu`).
+- `ORACLE_DEPLOY_PATH` — the absolute clone path, for example `/home/ubuntu/vitals-backend`.
+- `ORACLE_SSH_PRIVATE_KEY` — a dedicated deploy key, not a personal key.
+- `ORACLE_KNOWN_HOSTS` — the exact `ssh-keyscan -H <host>` output captured and reviewed during setup.
+
+Set the repository variable `ORACLE_DEPLOY_ENABLED=true` only after those
+secrets and the first manual deployment have been verified.
+
+The workflow refuses to run without all of those values, verifies the pinned
+SSH host key, refuses to overwrite tracked emergency changes on the VM, runs
+the container's migrations, and checks the internal health endpoint. The
+environment can require a reviewer before any production deployment.
+
 Migrations run automatically when the container starts. Watch for
 `migrations found` and `Server running`, then `Worker process started`.
 

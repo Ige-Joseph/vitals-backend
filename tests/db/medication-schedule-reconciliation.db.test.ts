@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import type { Prisma } from '@prisma/client';
 import { truncateAll } from './setup/db-lifecycle';
 import { createUser } from './helpers/factories';
 import {
@@ -83,7 +84,7 @@ const addDose = async (options: {
   withReminder?: boolean;
   leadMinutes?: number;
   eventType?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: Prisma.InputJsonValue;
 }): Promise<SeededEvent> => {
   const scheduledFor = new Date(options.scheduledFor);
 

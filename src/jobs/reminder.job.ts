@@ -5,6 +5,7 @@ import { outboxService } from '@/modules/outbox/outbox.service';
 import { reconciliationService } from '@/modules/billing/reconciliation.service';
 import { appointmentsService } from '@/modules/appointments/appointments.service';
 import { reportsService } from '@/modules/reports/reports.service';
+import { recoverDueAdherenceChecks } from '@/modules/care/adherence.service';
 import { createLogger } from '@/lib/logger';
 import { env } from '@/config/env';
 
@@ -33,6 +34,7 @@ export const reminderSchedulerWorker = new Worker(
     if (job.name === REMINDER_JOB) {
       log.debug('Reminder engine tick');
       await reminderEngine.processDueReminders();
+      await recoverDueAdherenceChecks();
     }
 
     if (job.name === OUTBOX_JOB) {

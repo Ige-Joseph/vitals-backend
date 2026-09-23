@@ -70,7 +70,9 @@ services:
 
   # ── The API and every worker, in one process ──────────────────────────
   backend:
-    image: ghcr.io/ige-joseph/vitals-backend:latest
+    # CI/CD supplies an immutable sha tag. Keeping `latest` as the fallback
+    # preserves the one-time/manual deployment command in the runbook.
+    image: ${BACKEND_IMAGE:-ghcr.io/ige-joseph/vitals-backend:latest}
     restart: unless-stopped
     depends_on:
       redis:

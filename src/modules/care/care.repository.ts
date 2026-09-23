@@ -342,6 +342,25 @@ export const careRepository = {
     });
   },
 
+  findDueAdherenceChecks(now = new Date(), limit = 50) {
+    const graceCutoff = new Date(now.getTime() - 2 * 60 * 1000);
+    const lookbackCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    return prisma.reminder.findMany({
+      where: {
+        status: 'SENT',
+        adherenceCheckProcessedAt: null,
+        adherenceCheckDueAt: {
+          lte: graceCutoff,
+          gte: lookbackCutoff,
+        },
+      },
+      orderBy: { adherenceCheckDueAt: 'asc' },
+      take: limit,
+      select: { id: true, adherenceCheckDueAt: true },
+    });
+  },
+
   // ─── Activity Log ──────────────────────────────────────────────────────
 
   createActivityLog(

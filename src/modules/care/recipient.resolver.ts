@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { createLogger } from '@/lib/logger';
+import type { Prisma } from '@prisma/client';
 
 const log = createLogger('recipient-resolver');
 
@@ -32,9 +33,15 @@ export const recipientResolver = {
    * still applies the liveness checks — an old job must not deliver to a
    * deactivated or erased account either.
    */
-  async forPerson(personId: string | undefined, legacyUserId?: string): Promise<Recipient[]> {
+  async forPerson(
+    personId: string | undefined,
+    legacyUserId?: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Recipient[]> {
+    const client = tx ?? prisma;
+
     if (personId) {
-      const memberships = await prisma.personMembership.findMany({
+      const memberships = await client.personMembership.findMany({
         where: {
           personId,
           status: 'ACTIVE',
@@ -62,7 +69,7 @@ export const recipientResolver = {
 
     if (!legacyUserId) return [];
 
-    const user = await prisma.user.findFirst({
+    const user = await client.user.findFirst({
       where: { id: legacyUserId, isActive: true, erasedAt: null },
       select: { id: true, email: true, profile: { select: { timezone: true } } },
     });

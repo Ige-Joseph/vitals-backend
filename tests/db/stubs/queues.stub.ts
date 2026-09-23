@@ -56,6 +56,9 @@ function makeQueue(queue: string) {
     async getJobs() {
       return [];
     },
+    async getJob() {
+      return undefined;
+    },
   };
 }
 

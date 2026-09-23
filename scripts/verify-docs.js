@@ -154,11 +154,16 @@ for (const [, body] of schema.matchAll(/enum\s+\w+\s*\{([^}]*)\}/g)) {
 }
 
 // Identifiers that are neither env vars nor enum values: SQL, HTTP, job names,
-// and constants that live in application config.
+// constants that live in application config, and deployment-system secrets.
+// GitHub Environment secrets are intentionally not application environment
+// variables: they exist only on the Actions runner and must remain explicit in
+// the Oracle deployment runbook.
 for (const other of [
   'SELECT', 'UPDATE', 'WHERE', 'RETURNING', 'DELETE', 'PATCH', 'POST', 'JSON',
   'PROCESS_OUTBOX', 'PROCESS_DUE_REMINDERS', 'SWEEP_MISSED_APPOINTMENTS',
   'MIN_CONFIDENCE_TO_NAME_DRUG', 'NOT_FOUND', 'VALIDATION_ERROR',
+  'ORACLE_HOST', 'ORACLE_USER', 'ORACLE_DEPLOY_PATH', 'ORACLE_SSH_PRIVATE_KEY',
+  'ORACLE_KNOWN_HOSTS', 'ORACLE_DEPLOY_ENABLED',
 ]) known.add(other);
 
 for (const doc of Object.keys(text)) {
