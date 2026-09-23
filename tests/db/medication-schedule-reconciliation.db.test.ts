@@ -1,6 +1,5 @@
 import { prisma } from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
-import { truncateAll } from './setup/db-lifecycle';
 import { createUser } from './helpers/factories';
 import {
   planReconciliation,
@@ -142,9 +141,7 @@ describe('medication schedule reconciliation', () => {
   let ancEvent: SeededEvent;
   let noMetadataTime: SeededEvent;
 
-  beforeAll(async () => {
-    await truncateAll();
-
+  const seedFixture = async () => {
     lagos = await createUser({ email: 'lagos@test.local' });
     newYork = await createUser({ email: 'ny@test.local' });
 
@@ -279,12 +276,11 @@ describe('medication schedule reconciliation', () => {
       time: '08:00',
       metadata: { medicationName: 'Metformin', dosage: '500mg' },
     });
-  });
+  };
 
-  afterAll(async () => {
-    await truncateAll();
-    await prisma.$disconnect();
-  });
+  // The DB harness truncates before every test. Seed the complete fixture for
+  // each case instead of relying on state leaking from a previous case.
+  beforeEach(seedFixture);
 
   // ────────────────────────────────────────────────────────────────
   // 10. Dry run performs zero writes
@@ -338,7 +334,7 @@ describe('medication schedule reconciliation', () => {
   // ────────────────────────────────────────────────────────────────
 
   describe('apply', () => {
-    beforeAll(async () => {
+    beforeEach(async () => {
       await runReconciliation({ dryRun: false, now: NOW });
     });
 
@@ -474,6 +470,10 @@ describe('medication schedule reconciliation', () => {
   // ────────────────────────────────────────────────────────────────
 
   describe('second run', () => {
+    beforeEach(async () => {
+      await runReconciliation({ dryRun: false, now: NOW });
+    });
+
     it('reports nothing left to change', async () => {
       const report = await planReconciliation({ now: NOW });
 
