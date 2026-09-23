@@ -1,21 +1,69 @@
 import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { userRepository, UpdateProfileInput } from './user.repository';
+import { personService } from '@/modules/person/person.service';
+import { subscriptionService } from '@/modules/billing/subscription.service';
+import { personHealthService } from '@/modules/person/person.health.service';
+import { personAccess } from '@/modules/person/person.access';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('user-service');
 
 export const userService = {
+  /**
+   * Account settings. The clinical half now lives on the Person.
+   *
+   * The `profile` block keeps every key it had, so no client breaks — but the
+   * clinical values in it are read from PersonHealthProfile, not from the
+   * columns on Profile. Those columns are retained and unread for the
+   * compatibility window. `health` is the canonical block; the clinical keys
+   * inside `profile` are deprecated and go when the window closes.
+   */
   async getProfile(userId: string) {
     const user = await userRepository.getProfile(userId);
     if (!user) throw AppError.notFound('User not found');
+
+    const health = await personHealthService.get(userId);
+
+    // Demographics live on the Person too. Profile's copies are retained and
+    // unread for the compatibility window.
+    const person = await prisma.person.findFirst({
+      where: { ownerUserId: userId, archivedAt: null },
+      select: { id: true, displayName: true, dateOfBirth: true, gender: true },
+    });
 
     return {
       id: user.id,
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      profile: user.profile,
+      profile: user.profile
+        ? {
+            ...user.profile,
+            // Deprecated mirrors, sourced from the Person.
+            gender: person?.gender ?? null,
+            dateOfBirth: person?.dateOfBirth ?? null,
+            bloodGroup: health.bloodGroup,
+            genotype: health.genotype,
+            heightCm: health.heightCm,
+            weightKg: health.weightKg,
+            allergies: health.allergies,
+            existingConditions: health.existingConditions,
+            currentMedications: health.currentMedications,
+            disabilities: health.disabilities,
+            smokingStatus: health.smokingStatus,
+            alcoholUse: health.alcoholUse,
+          }
+        : user.profile,
+      health,
+      person: person
+        ? {
+            personId: person.id,
+            displayName: person.displayName,
+            dateOfBirth: person.dateOfBirth,
+            gender: person.gender,
+          }
+        : null,
     };
   },
 
@@ -23,7 +71,57 @@ export const userService = {
     const user = await userRepository.findById(userId);
     if (!user) throw AppError.notFound('User not found');
 
-    const { firstName, lastName, ...profileData } = data;
+    const {
+      firstName,
+      lastName,
+      gender,
+      dateOfBirth,
+      bloodGroup,
+      genotype,
+      heightCm,
+      weightKg,
+      allergies,
+      existingConditions,
+      currentMedications,
+      disabilities,
+      smokingStatus,
+      alcoholUse,
+      ...profileData
+    } = data as Record<string, any>;
+
+    // Clinical fields sent to this endpoint are routed to the caller's own
+    // Person rather than written to Profile, so existing clients keep working
+    // while the data lands in its new home.
+    const clinical = {
+      bloodGroup,
+      genotype,
+      heightCm,
+      weightKg,
+      allergies,
+      existingConditions,
+      currentMedications,
+      disabilities,
+      smokingStatus,
+      alcoholUse,
+    };
+
+    if (Object.values(clinical).some((v) => v !== undefined)) {
+      await personHealthService.update(userId, clinical);
+    }
+
+    // Demographics sent to this endpoint land on the caller's own Person.
+    if (gender !== undefined || dateOfBirth !== undefined) {
+      const selfPersonId = await personAccess.resolveSelfPersonId(userId);
+      await prisma.person.update({
+        where: { id: selfPersonId },
+        data: {
+          ...(gender !== undefined ? { gender } : {}),
+          ...(dateOfBirth !== undefined
+            ? { dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null }
+            : {}),
+        },
+      });
+    }
 
     const result = await prisma.$transaction(
       async (tx) => {
@@ -60,8 +158,27 @@ export const userService = {
     if (!user) throw AppError.notFound('User not found');
     if (!user.isActive) throw AppError.conflict('User is already deactivated');
 
+    // Archive is the only removal path, and it must not strand anyone. An
+    // account that is the sole manager of an unclaimed health record has to
+    // hand it over, or have it claimed or archived, first — otherwise that
+    // person's reminders simply stop with nobody notified.
+    await personService.assertCanArchiveAccount(targetUserId);
+
+    // An archived account must not keep being charged. Local state is closed
+    // regardless; an unconfirmed provider cancellation is recorded rather than
+    // blocking the archive.
+    const billing = await subscriptionService.cancelAllForAccount(
+      targetUserId,
+      'account-deactivation',
+    );
+
     await userRepository.setActiveStatus(targetUserId, false);
-    log.info('User deactivated', { adminId, targetUserId });
+    log.info('User deactivated', {
+      adminId,
+      targetUserId,
+      subscriptionsCancelled: billing.cancelled,
+      cancellationsUnconfirmed: billing.unconfirmed,
+    });
   },
 
   async reactivateUser(adminId: string, targetUserId: string) {

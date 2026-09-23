@@ -32,6 +32,10 @@ export const authRepository = {
       passwordHash: string;
       firstName?: string;
       lastName?: string;
+      /// Only ever true for a federated identity, where the provider has
+      /// already proven the address. The password flow leaves it unset and
+      /// mails a verification link.
+      emailVerified?: boolean;
     },
     tx?: Prisma.TransactionClient,
   ) {
@@ -42,6 +46,9 @@ export const authRepository = {
         passwordHash: data.passwordHash,
         firstName: data.firstName,
         lastName: data.lastName,
+        ...(data.emailVerified === undefined
+          ? {}
+          : { emailVerified: data.emailVerified }),
       },
     });
   },

@@ -5,6 +5,8 @@ import { redisConnection } from '@/lib/redis';
 import { closeQueues } from '@/queues/queue.registry';
 import { initFirebase } from '@/lib/firebase';
 import { createLogger } from '@/lib/logger';
+import { registerPaystack } from '@/modules/billing/provider/paystack';
+import { billingService } from '@/modules/billing/billing.service';
 
 const log = createLogger('server');
 
@@ -12,10 +14,16 @@ const HOST = '0.0.0.0';
 
 const start = async () => {
   initFirebase();
+  registerPaystack();
 
   try {
     await prisma.$connect();
     log.info('Database connected');
+
+    // Insert-only, so running it every boot is free and a fresh deploy has
+    // something to sell before the first request arrives.
+    const { inserted } = await billingService.syncPrices();
+    if (inserted > 0) log.info('Prices synced', { inserted });
   } catch (err: any) {
     log.error('Failed to connect to database', { error: err.message });
     process.exit(1);

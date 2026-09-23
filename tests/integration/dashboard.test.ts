@@ -9,8 +9,38 @@ jest.mock('@/lib/prisma', () => ({
     $disconnect: jest.fn(),
     $queryRaw: jest.fn().mockResolvedValue([]),
     careEvent: { findMany: jest.fn().mockResolvedValue([]) },
+    carePlan: {
+      findMany: jest.fn().mockResolvedValue([]),
+      groupBy: jest.fn().mockResolvedValue([]),
+    },
     activityLog: { findMany: jest.fn().mockResolvedValue([]) },
     dailyUsage: { findUnique: jest.fn().mockResolvedValue(null) },
+    // getUsageSummary delegates to the quota service, which reads the tier.
+    user: { findUnique: jest.fn().mockResolvedValue({ planType: 'FREE' }) },
+    // Entitlement resolves from subscription state; no subscription means the
+    // tier falls back to the projection on User.
+    subscription: { findFirst: jest.fn().mockResolvedValue(null) },
+    // No grant either: this account is genuinely FREE, by both of the facts
+    // that can grant Premium.
+    entitlementGrant: { findFirst: jest.fn().mockResolvedValue(null) },
+
+    person: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }),
+      findUniqueOrThrow: jest.fn().mockResolvedValue({
+        id: 'person-1',
+        displayName: 'Test User',
+        ownerUserId: 'user-1',
+        origin: 'SELF',
+      }),
+    },
+    personMembership: {
+      findUnique: jest.fn().mockResolvedValue({
+        role: 'OWNER',
+        status: 'ACTIVE',
+        person: { archivedAt: null },
+      }),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     moodLog: { findFirst: jest.fn().mockResolvedValue(null) },
   },
 }));
@@ -41,11 +71,12 @@ describe('GET /api/v1/dashboard', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toHaveProperty('todayTasks');
-    expect(res.body.data).toHaveProperty('upcomingReminders');
-    expect(res.body.data).toHaveProperty('recentActivity');
-    expect(res.body.data).toHaveProperty('usageSummary');
-    expect(res.body.data).toHaveProperty('latestMoodInsight');
+    expect(res.body.data).toHaveProperty('subject');
+    expect(res.body.data.care).toHaveProperty('todayTasks');
+    expect(res.body.data.care).toHaveProperty('upcomingReminders');
+    expect(res.body.data.care).toHaveProperty('recentActivity');
+    expect(res.body.data.care).toHaveProperty('latestMoodInsight');
+    expect(res.body.data.account).toHaveProperty('usageSummary');
   });
 
   it('usageSummary has correct structure', async () => {
@@ -53,7 +84,7 @@ describe('GET /api/v1/dashboard', () => {
       .get('/api/v1/dashboard')
       .set('Authorization', `Bearer ${makeToken()}`);
 
-    const { usageSummary } = res.body.data;
+    const { usageSummary } = res.body.data.account;
     expect(usageSummary).toHaveProperty('symptomChecksUsed');
     expect(usageSummary).toHaveProperty('symptomChecksLimit');
     expect(usageSummary).toHaveProperty('drugDetectionsUsed');

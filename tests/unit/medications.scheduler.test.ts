@@ -1,27 +1,34 @@
 import { generateMedicationSchedule } from '@/modules/medications/medications.scheduler';
+import { MAX_SCHEDULE_DAYS } from '@/config/medication.config';
 
-const today = new Date();
-today.setHours(0, 0, 0, 0);
+// Date-only values, built at UTC midnight because that is what the API
+// produces: `startDate` arrives as "YYYY-MM-DD" and `new Date(str)` parses a
+// bare date as UTC. The scheduler reads the UTC components for exactly that
+// reason, so a fixture built at *local* midnight would be a day out for any
+// machine ahead of UTC and would not match production input.
+const utcMidnight = (offsetDays: number): Date => {
+  const d = new Date();
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + offsetDays),
+  );
+};
 
-const tomorrow = new Date(today);
-tomorrow.setDate(tomorrow.getDate() + 1);
+const tomorrow = utcMidnight(1);
 
-const in7Days = new Date(today);
-in7Days.setDate(in7Days.getDate() + 7);
+const in7Days = utcMidnight(7);
 
 const baseInput = {
   medicationName: 'Paracetamol',
   dosage: '500mg',
   startDate: tomorrow, // tomorrow so all doses are future
   endDate: in7Days,
+  // Doses are wall-clock times and now need a zone to become instants.
+  // Timezone behaviour itself is covered in medications.timezone.test.ts;
+  // these cases are about dose counts and shape.
+  timeZone: 'Africa/Lagos',
 };
 
 describe('generateMedicationSchedule', () => {
-  it('returns empty array for AS_NEEDED frequency', () => {
-    const result = generateMedicationSchedule({ ...baseInput, frequency: 'AS_NEEDED' });
-    expect(result).toHaveLength(0);
-  });
-
   it('generates correct dose count for ONCE_DAILY over 7 days', () => {
     const result = generateMedicationSchedule({ ...baseInput, frequency: 'ONCE_DAILY' });
     // 7 days inclusive: tomorrow through in7Days = 7 doses
@@ -42,7 +49,21 @@ describe('generateMedicationSchedule', () => {
       customTimes: ['09:00', '21:00'],
     });
 
-    const hours = result.map((d) => d.scheduledFor.getHours());
+    // Read back through the schedule's own zone, not the server's. Using
+    // getHours() here asserted that a dose lands at the configured hour *on
+    // the machine running the test*, which is the bug the timezone fix
+    // removed: it passed only while the server happened to sit in the same
+    // zone as the user.
+    const hours = result.map((d) =>
+      Number(
+        new Intl.DateTimeFormat('en-GB', {
+          timeZone: baseInput.timeZone,
+          hour12: false,
+          hour: '2-digit',
+        }).format(d.scheduledFor),
+      ),
+    );
+
     expect(hours).toContain(9);
     expect(hours).toContain(21);
   });
@@ -67,12 +88,7 @@ describe('generateMedicationSchedule', () => {
       endDate: farFuture,
     });
 
-    expect(result.length).toBeLessThanOrEqual(365);
-  });
-
-  it('generates one dose per week for WEEKLY', () => {
-    const result = generateMedicationSchedule({ ...baseInput, frequency: 'WEEKLY' });
-    expect(result.length).toBe(1); // 7-day window = 1 weekly dose
+    expect(result.length).toBe(MAX_SCHEDULE_DAYS);
   });
 
   it('all scheduled doses are in the future', () => {

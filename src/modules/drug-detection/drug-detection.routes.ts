@@ -6,6 +6,7 @@ import { ok, created, badRequest } from '@/lib/response';
 import { AuthenticatedRequest } from '@/types/express';
 import { geminiProvider } from '@/providers/ai/gemini.provider';
 import { quotaService } from '@/modules/usage/quota.service';
+import { applyDrugIdentificationPolicy } from '@/lib/ai-safety';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('drug-detection');
@@ -105,11 +106,7 @@ router.post(
     try {
       if (!req.file) return badRequest(res, 'Image file is required');
 
-      await quotaService.checkAndIncrement(
-        req.user!.sub,
-        req.user!.planType,
-        'drugDetection',
-      );
+      await quotaService.checkAndIncrement(req.user!.sub, 'drugDetection');
 
       const base64 = req.file.buffer.toString('base64');
       const mimeType = req.file.mimetype;
@@ -141,12 +138,10 @@ Respond with a JSON object with exactly these fields:
           aiParsed.caution &&
           ['high', 'moderate', 'low', 'unable_to_identify'].includes(aiParsed.confidence)
         ) {
-          aiResponse = {
-            ...aiParsed,
-            disclaimer:
-              aiParsed.disclaimer ||
-              'This is general information only and not a medical diagnosis. Always consult a qualified pharmacist or doctor.',
-          };
+          // Withhold the name entirely when the model was not confident enough
+          // to be relied on. Applied here, before persistence and response, so
+          // no client can render an uncertain identification as a certain one.
+          aiResponse = applyDrugIdentificationPolicy(aiParsed) as DrugDetectionResponse;
         } else {
           usedFallback = true;
           log.warn('Gemini drug detection response missing required fields — using fallback', {

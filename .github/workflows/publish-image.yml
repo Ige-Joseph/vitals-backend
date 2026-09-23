@@ -1,0 +1,164 @@
+name: Publish image
+
+# Builds the production image and pushes it to GitHub Container Registry.
+#
+# The deployment target is a 1 GB Oracle instance. `npm ci` followed by `tsc`
+# is comfortably the heaviest thing that machine would ever be asked to do, and
+# it would either thrash swap or be OOM-killed partway through. So the image is
+# built here, where the runner has 16 GB, and the VM only ever pulls it.
+#
+# This runs only after CI passes on main. A green typecheck, an OpenAPI check,
+# a docs check and the test suite are the gate; publishing a broken image the
+# VM will happily pull is not a failure mode worth having.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  # Manual runs, for redeploying an unchanged commit.
+  workflow_dispatch:
+
+concurrency:
+  group: publish-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+
+    # Only when CI actually succeeded. workflow_run fires on failure too.
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      github.event.workflow_run.conclusion == 'success'
+
+    permissions:
+      contents: read
+      # Required to push to ghcr.io as GITHUB_TOKEN. Without it the push fails
+      # with a 403 that reads like a credential problem.
+      packages: write
+
+    env:
+      IMAGE_NAME: ghcr.io/ige-joseph/vitals-backend
+      # workflow_run's GITHUB_SHA is the workflow file's default-branch SHA,
+      # not necessarily the commit CI tested. Publish the tested commit.
+      IMAGE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.IMAGE_SHA }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # `latest` is what the VM pulls; the sha tag is what you roll back to.
+          tags: |
+            type=raw,value=latest
+            type=raw,value=sha-${{ env.IMAGE_SHA }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The Oracle shape is VM.Standard.E2.1.Micro — AMD, x86. No ARM
+          # build is needed, and adding one would double build time for an
+          # architecture nothing runs.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Image published" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "On the VM:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "cd /opt/vitals" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose -f docker-compose.prod.yml pull" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose -f docker-compose.prod.yml up -d" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  deploy-oracle:
+    name: Deploy the published image to Oracle
+    needs: publish
+    # Deployment is opt-in until the protected environment and its secrets are
+    # present. Image publishing remains useful while the VM is being prepared.
+    if: vars.ORACLE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      IMAGE_NAME: ghcr.io/ige-joseph/vitals-backend
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      ORACLE_DEPLOY_PATH: ${{ secrets.ORACLE_DEPLOY_PATH }}
+      ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+      ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+
+    steps:
+      - name: Check deployment configuration
+        run: |
+          test -n "$ORACLE_HOST"
+          test -n "$ORACLE_USER"
+          test -n "$ORACLE_DEPLOY_PATH"
+          test -n "$ORACLE_KNOWN_HOSTS"
+          test -n "$ORACLE_SSH_PRIVATE_KEY"
+
+      - name: Load deployment SSH key
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+
+      - name: Trust only the configured Oracle host key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy the tested image and verify health
+        run: |
+          ssh -o BatchMode=yes "$ORACLE_USER@$ORACLE_HOST" \
+            "DEPLOY_SHA='$DEPLOY_SHA' IMAGE_NAME='$IMAGE_NAME' DEPLOY_PATH='$ORACLE_DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          # Do not overwrite an operator's tracked emergency change. Ignored
+          # .env.production and certificates are unaffected by this check.
+          git diff --quiet
+          git diff --cached --quiet
+          git fetch origin main
+          git cat-file -e "$DEPLOY_SHA^{commit}"
+          git checkout --detach "$DEPLOY_SHA"
+
+          export BACKEND_IMAGE="$IMAGE_NAME:sha-$DEPLOY_SHA"
+          docker compose -f docker-compose.prod.yml pull backend
+          docker compose -f docker-compose.prod.yml up -d --remove-orphans
+          docker compose -f docker-compose.prod.yml exec -T backend \
+            wget -qO- http://127.0.0.1:3000/api/v1/health
+          REMOTE
+
+      - name: Deployment summary
+        run: |
+          echo "### Oracle deployment complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$DEPLOY_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`$IMAGE_NAME:sha-$DEPLOY_SHA\`" >> "$GITHUB_STEP_SUMMARY"

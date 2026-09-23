@@ -5,6 +5,7 @@ import {
   SendVerificationEmailPayload,
   SendPasswordResetEmailPayload,
   SendMedicationFallbackEmailPayload,
+  SendPersonInvitationEmailPayload,
 } from '@/queues/queue.registry';
 import { createLogger } from '@/lib/logger';
 
@@ -96,6 +97,29 @@ export const outboxService = {
             log.info('Enqueued password reset email job', {
               outboxEventId: event.id,
               userId: event.userId,
+            });
+
+            break;
+          }
+
+          case 'PERSON_INVITATION': {
+            const payload = event.payload as unknown as SendPersonInvitationEmailPayload;
+
+            await notificationsQueue.add(
+              JOB_NAMES.SEND_PERSON_INVITATION_EMAIL,
+              {
+                ...payload,
+                outboxEventId: event.id,
+              },
+              {
+                jobId: `person-invitation-${event.id}`,
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 5000 },
+              },
+            );
+
+            log.info('Enqueued person invitation email job', {
+              outboxEventId: event.id,
             });
 
             break;

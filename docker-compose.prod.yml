@@ -1,0 +1,160 @@
+# Production stack for the Oracle VM.
+#
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# This is NOT docker-compose.yml. That one is the local development stack and
+# would be actively wrong here: it starts a Postgres you are not using, an
+# nginx serving a frontend Vercel already serves, and a Redis configured to
+# throw away queued jobs on restart. Between them that is most of a 1 GB
+# machine, spent on nothing.
+#
+# ── What this assumes ────────────────────────────────────────────────────
+#
+#   * VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM, x86, Ubuntu 24.04
+#   * Postgres is Supabase, reached over the network
+#   * the web app is on Vercel and is not served from here
+#   * Cloudflare fronts this host with SSL mode Full (strict), so `edge`
+#     terminates TLS using a Cloudflare Origin Certificate
+#
+# ── The memory budget, measured rather than guessed ──────────────────────
+#
+# The API container was measured at 189 MiB idle and 205 MiB peak while
+# serving 20 concurrent PDF renders. The limits below are roughly double that,
+# which is headroom rather than a target:
+#
+#   edge       32 MB     (nginx measured at 8.7 MiB serving a real site)
+#   backend   400 MB
+#   redis     150 MB     (100 MB of data plus overhead)
+#   ---------------------
+#   ~580 MB of the ~970 MB the OS actually leaves you
+#
+# The limits exist so that one runaway container is killed on its own instead
+# of the kernel choosing a victim — and on a box this size the victim it
+# chooses is usually the API.
+
+# The project name prefixes every container: vitals-backend-1, vitals-redis-1,
+# vitals-edge-1.
+#
+# Deliberately no container_name on the services. Fixed names collide with the
+# development stack, which also calls its Redis "vitals-redis" — so rehearsing
+# this stack locally failed outright until they were removed. Compose-generated
+# names are unique per project, and every command in the runbook addresses
+# services by name rather than container, so nothing depends on the old ones.
+name: vitals
+
+services:
+  # ── TLS termination and the only published ports ──────────────────────
+  edge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Cloudflare Origin Certificate. Generated once in the Cloudflare
+      # dashboard, valid for 15 years, and trusted only by Cloudflare — it is
+      # not a public CA certificate and a browser reaching this host directly
+      # would reject it. That is the intent.
+      - ./deploy/certs:/etc/nginx/certs:ro
+    mem_limit: 32m
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── The API and every worker, in one process ──────────────────────────
+  backend:
+    # CI/CD supplies an immutable sha tag. Keeping `latest` as the fallback
+    # preserves the one-time/manual deployment command in the runbook.
+    image: ${BACKEND_IMAGE:-ghcr.io/ige-joseph/vitals-backend:latest}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    # No published ports. The API is reachable only through `edge`, so nothing
+    # can bypass TLS by talking to the instance's public IP on 3000.
+    expose:
+      - "3000"
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      # Below the 400 MB container limit on purpose. V8 grows its heap until it
+      # hits a limit; if that limit is the cgroup's, the process is killed
+      # rather than collected. Naming a smaller number means V8 does a full GC
+      # first and the container survives the spike.
+      NODE_OPTIONS: --max-old-space-size=320
+
+      # Redis is on the compose network, not published to the internet.
+      UPSTASH_REDIS_URL: redis://redis:6379
+
+      # One core, shared with the API.
+      #
+      # The defaults total 15 concurrent job slots, which suits a multi-core
+      # host. Here every job competes with every request for the only event
+      # loop there is, so the queue depth is what protects request latency —
+      # not the number of jobs run at once.
+      WORKER_CONCURRENCY_NOTIFICATIONS: 2
+      WORKER_CONCURRENCY_BILLING: 2
+      WORKER_CONCURRENCY_ADHERENCE: 1
+      WORKER_CONCURRENCY_REPORTS: 1
+
+      # Inside the container's writable layer, which is disk and is discarded
+      # when the container is recreated. Both are wanted: a rendered health
+      # summary must not outlive the process accountable for deleting it.
+      REPORT_STORAGE_DIR: /tmp/vitals-reports
+      REPORT_TTL_MINUTES: 60
+    command: >
+      sh -c "npx prisma migrate deploy &&
+             node -r module-alias/register dist/main.js"
+    healthcheck:
+      # 127.0.0.1, not localhost: the container resolves localhost to ::1 as
+      # well, busybox wget tries IPv6 first, and the server binds 0.0.0.0.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    mem_limit: 400m
+    logging: *logging
+
+  # ── Queues. Not a cache. ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Not published. Redis has no password here because it is reachable only
+    # from the compose network — publishing it would need one immediately.
+    expose:
+      - "6379"
+    command: >
+      redis-server
+      --maxmemory 100mb
+      --maxmemory-policy noeviction
+      --appendonly yes
+      --appendfsync everysec
+      --save ""
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 150m
+    logging: *logging
+
+volumes:
+  # BullMQ represents queued and delayed jobs as Redis state, so this volume
+  # holds scheduled work — a reminder due tomorrow lives here, not in Postgres.
+  # Losing it loses reminders silently, which is why AOF is on and why this is
+  # a named volume rather than container-local storage.
+  redis-data:
+    name: vitals-redis-data

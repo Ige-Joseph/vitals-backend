@@ -6,14 +6,15 @@ import { careRepository } from '@/modules/care/care.repository';
 import { careService } from '@/modules/care/care.service';
 import { aiMedicationDraftsRepository } from '@/modules/ai-medication-drafts/ai-medication-drafts.repository';
 import { medicationRepository } from './medications.repository';
+import { personAccess } from '@/modules/person/person.access';
 import { generateMedicationSchedule } from './medications.scheduler';
 import { FrequencyKey } from '@/config/medication.config';
 import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
 import { calendarService } from '@/modules/calendar/calendar.service';
+import { DEFAULT_TIMEZONE, isValidTimeZone } from '@/lib/timezone';
 
 const log = createLogger('medications-service');
-const FREE_MEDICATION_PLAN_LIMIT = 5;
 
 export interface CreateMedicationInput {
   name: string;
@@ -35,17 +36,62 @@ const parseDateOnly = (value: string, fieldName: string): Date => {
   return date;
 };
 
+/**
+ * Which clock "08:00" is read against.
+ *
+ * The account setting the schedule up, not the Person it is about: `timezone`
+ * lives on `Profile`, which is account-scoped, and a managed Person has no
+ * account and therefore no zone of its own. For a self-Person the two are the
+ * same account anyway, and for a dependent the caregiver's zone is both the
+ * only answer available and almost always the right one — they are typically
+ * in the same house.
+ *
+ * `Profile.timezone` is NOT NULL with a column default, so the only way to get
+ * nothing here is an account with no Profile row at all — signup creates one
+ * only when gender or country was supplied. Those accounts fall back to the
+ * same value the column would have given them rather than to the server's
+ * zone, which is what produced the drift this fixes.
+ */
+const resolveScheduleTimeZone = async (userId: string): Promise<string> => {
+  const profile = await prisma.profile.findUnique({
+    where: { userId },
+    select: { timezone: true },
+  });
+
+  const timeZone = profile?.timezone?.trim();
+
+  if (!timeZone) {
+    log.info('No profile timezone; using default for schedule generation', {
+      userId,
+      timeZone: DEFAULT_TIMEZONE,
+    });
+    return DEFAULT_TIMEZONE;
+  }
+
+  // A zone Intl does not recognise would throw inside the scheduler, half way
+  // through building a plan. Checked here so the fallback is a logged decision
+  // rather than a 500.
+  if (!isValidTimeZone(timeZone)) {
+    log.warn('Profile timezone is not a recognised IANA zone; using default', {
+      userId,
+      timeZone,
+    });
+    return DEFAULT_TIMEZONE;
+  }
+
+  return timeZone;
+};
+
 export const medicationsService = {
-  async createMedication(userId: string, input: CreateMedicationInput) {
+  async createMedication(
+    userId: string,
+    input: CreateMedicationInput,
+    requestedPersonId?: string,
+  ) {
     const startDate = parseDateOnly(input.startDate, 'startDate');
 
-    const activeMedicationCount = await medicationRepository.countActiveByUser(userId);
-
-    if (activeMedicationCount >= FREE_MEDICATION_PLAN_LIMIT) {
-      throw AppError.badRequest(
-        `You can only create up to ${FREE_MEDICATION_PLAN_LIMIT} active medication plans for now`,
-      );
-    }
+    // Adding a medication to someone's record is a write on their record.
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'write');
 
     let aiDraftIdToConfirm: string | undefined;
 
@@ -88,6 +134,8 @@ export const medicationsService = {
       throw AppError.badRequest('End date must be after or equal to start date');
     }
 
+    const timeZone = await resolveScheduleTimeZone(userId);
+
     const schedule = generateMedicationSchedule({
       medicationName: input.name,
       dosage: input.dosage,
@@ -96,6 +144,7 @@ export const medicationsService = {
       endDate,
       customTimes: input.customTimes,
       instructions: input.instructions,
+      timeZone,
     });
 
     log.info('Schedule generated', {
@@ -111,6 +160,9 @@ export const medicationsService = {
         const carePlan = await careRepository.createCarePlan(
           {
             userId,
+            // Dual-write: userId stays for the compatibility window, personId
+            // is the subject this plan is actually about.
+            personId,
             type: 'MEDICATION',
             title: `${input.name} — ${input.dosage}`,
             metadata: {
@@ -150,6 +202,8 @@ export const medicationsService = {
         await careRepository.createActivityLog(
           {
             userId,
+            personId,
+            actorUserId: userId,
             type: 'MEDICATION_CREATED',
             message: `Medication plan created: ${input.name}`,
             metadata: {
@@ -214,18 +268,21 @@ export const medicationsService = {
     return result;
   },
 
-  async listMedications(userId: string) {
-    return medicationRepository.listByUser(userId);
+  async listMedications(userId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+    return medicationRepository.listByPerson({ personId, userId });
   },
 
-  async getMedication(userId: string, carePlanId: string) {
-    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+  async getMedication(userId: string, carePlanId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+    const med = await medicationRepository.findWithPlan(carePlanId, { personId, userId });
     if (!med) throw AppError.notFound('Medication not found');
     return med;
   },
 
-  async deactivateMedication(userId: string, carePlanId: string) {
-    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+  async deactivateMedication(userId: string, carePlanId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'write');
+    const med = await medicationRepository.findWithPlan(carePlanId, { personId, userId });
 
     if (!med) {
       throw AppError.notFound('Medication not found');
@@ -290,10 +347,11 @@ export const medicationsService = {
     };
   },
 
-  async getMedicationHistory(userId: string, carePlanId: string) {
-    const med = await medicationRepository.findWithPlan(carePlanId, userId);
+  async getMedicationHistory(userId: string, carePlanId: string, requestedPersonId?: string) {
+    const personId = await personAccess.resolveSubject(userId, requestedPersonId, 'read');
+    const med = await medicationRepository.findWithPlan(carePlanId, { personId, userId });
     if (!med) throw AppError.notFound('Medication not found');
 
-    return careRepository.listEventsByCarePlan(carePlanId, userId);
+    return careRepository.listEventsByCarePlan(carePlanId, { personId, userId });
   },
 };

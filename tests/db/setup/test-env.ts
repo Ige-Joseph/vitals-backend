@@ -1,0 +1,76 @@
+/**
+ * Runs as a Jest `setupFiles` entry — before the test framework installs and
+ * before any module under test is imported.
+ *
+ * That ordering is what makes this work. `src/config/env.ts` calls
+ * `dotenv.config()` at import time, and dotenv does not overwrite variables
+ * that are already present in `process.env`. Setting the connection string
+ * here therefore wins over `.env`, and Prisma reads it when the client is
+ * constructed.
+ */
+
+/**
+ * 127.0.0.1, not localhost.
+ *
+ * On Windows `localhost` resolves to ::1 first, and Docker Desktop's IPv6
+ * forwarding for published Postgres ports is unreliable — the port answers a
+ * TCP probe but Prisma fails with P1001 "Can't reach database server". Naming
+ * the IPv4 address avoids the whole question, and is equivalent everywhere
+ * else including CI.
+ */
+const DEFAULT_TEST_DATABASE_URL =
+  'postgresql://postgres:local@127.0.0.1:5436/vitals_test';
+
+const url = process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL;
+
+let databaseName: string;
+try {
+  databaseName = new URL(url).pathname.replace(/^\//, '');
+} catch {
+  throw new Error(`TEST_DATABASE_URL is not a valid connection string: ${url}`);
+}
+
+/**
+ * The suite truncates every table between tests. Pointed at the wrong database
+ * that is unrecoverable data loss, and the dev database is one digit away
+ * (5433/vitals vs 5436/vitals_test). Refuse anything that is not explicitly a
+ * test database rather than trusting the caller to have set it correctly.
+ */
+if (!databaseName.endsWith('_test')) {
+  throw new Error(
+    `Refusing to run database tests against "${databaseName}": the name must ` +
+      `end in "_test". These tests TRUNCATE every table between cases. ` +
+      `Set TEST_DATABASE_URL to a dedicated test database.`,
+  );
+}
+
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = url;
+process.env.DIRECT_URL = url;
+
+/**
+ * Point the payment provider at nothing.
+ *
+ * Tests that exercise the provider stand up their own HTTP stub on localhost
+ * and repoint this. What this line prevents is the case in between: an adapter
+ * built at module load, before any stub exists, quietly inheriting the real
+ * `https://api.paystack.co` and making live calls from a test run. Port 9 is
+ * the discard port — a connection there fails immediately and locally.
+ *
+ * The secret key is cleared for the same reason: nothing should be able to
+ * authenticate as us from a test.
+ */
+process.env.PAYSTACK_BASE_URL = 'http://127.0.0.1:9';
+delete process.env.PAYSTACK_SECRET_KEY;
+
+/**
+ * Rendered health summaries go to a directory of this run's own.
+ *
+ * The suite writes real PDFs and then asserts they were deleted, so it must
+ * not share a directory with a running development server — a sweep in either
+ * one would delete the other's files and the failure would look like a bug in
+ * the code under test.
+ */
+process.env.REPORT_STORAGE_DIR =
+  process.env.REPORT_STORAGE_DIR ??
+  require('path').join(require('os').tmpdir(), `vitals-reports-test-${process.pid}`);

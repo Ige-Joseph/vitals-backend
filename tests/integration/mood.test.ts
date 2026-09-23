@@ -14,6 +14,17 @@ jest.mock('@/lib/prisma', () => ({
       count: jest.fn(),
     },
     activityLog: { create: jest.fn() },
+    // The authorization layer resolves a subject and checks the membership
+    // before any clinical query runs.
+    person: { findFirst: jest.fn().mockResolvedValue({ id: 'person-1' }) },
+    personMembership: {
+      findUnique: jest.fn().mockResolvedValue({
+        role: 'OWNER',
+        status: 'ACTIVE',
+        person: { archivedAt: null },
+      }),
+      count: jest.fn().mockResolvedValue(0),
+    },
   },
 }));
 

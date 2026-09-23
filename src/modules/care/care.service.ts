@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { careRepository } from './care.repository';
+import { personAccess } from '@/modules/person/person.access';
 import { createLogger } from '@/lib/logger';
 import type { PrismaTx } from '@/types/prisma';
 import { Prisma } from '@prisma/client';
@@ -17,9 +18,15 @@ export const careService = {
       type?: string;
       from?: string;
       to?: string;
+      personId?: string;
     },
   ) {
-    return careRepository.listCareEvents(userId, {
+    // Resolve the subject and authorize before any clinical query runs. With
+    // no personId supplied this is the caller's own record, which is how every
+    // existing client continues to work unchanged.
+    const personId = await personAccess.resolveSubject(userId, filters.personId, 'read');
+
+    return careRepository.listCareEvents({ personId, userId }, {
       status: filters.status,
       type: filters.type,
       from: filters.from ? new Date(filters.from) : undefined,
@@ -34,7 +41,17 @@ export const careService = {
   ) {
     const event = await careRepository.findCareEvent(eventId);
     if (!event) throw AppError.notFound('Care event not found');
-    if (event.carePlan.userId !== userId) throw AppError.forbidden('Access denied');
+
+    // This is the check the whole layer was generalised from. It used to read
+    // `event.carePlan.userId !== userId`, which is only correct while caller
+    // and subject are the same entity.
+    if (event.carePlan.personId) {
+      await personAccess.assertPersonAccess(userId, event.carePlan.personId, 'write');
+    } else if (event.carePlan.userId !== userId) {
+      // Compatibility: a plan whose subject has not been backfilled still
+      // authorizes by account. Removable once personId is NOT NULL.
+      throw AppError.forbidden('Access denied');
+    }
 
     const updated = await prisma.$transaction(async (tx: PrismaTx) => {
       const updatedEvent = await careRepository.updateCareEventStatus(eventId, status, tx);
@@ -46,6 +63,11 @@ export const careService = {
       await careRepository.createActivityLog(
         {
           userId,
+          // Dual-write. userId stays authoritative for the compatibility
+          // window; personId is whose history this is, actorUserId is who did
+          // it. Before separation those were the same account.
+          personId: event.carePlan.personId ?? undefined,
+          actorUserId: userId,
           type: 'CARE_EVENT_UPDATED',
           message: `${event.title} marked as ${status.toLowerCase()}`,
           metadata: { eventId, status, eventType: event.eventType },

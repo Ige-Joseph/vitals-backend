@@ -1,0 +1,60 @@
+-- Repair: self-Persons created after 20260824150000 carry origin = 'MANAGED'.
+--
+-- That earlier migration introduced PersonOrigin with a column default of
+-- MANAGED and backfilled the rows that existed at the time. Signup was never
+-- updated to set the column, so every account created since has been writing a
+-- self-Person that describes itself as a dependent. The default is the whole
+-- cause: `origin` is omitted at the call site, so Postgres supplies MANAGED
+-- and nothing rejects it.
+--
+-- Why it matters rather than being cosmetic. `origin` is provenance and is
+-- never read for authorization, so no access decision was wrong. But it is
+-- read for two things that were:
+--
+--   * the first-baby exemption in personRepository.capacityFor — scoped to
+--     `origin IN ('DELIVERY','BABY_PROFILE')` and to Persons with
+--     `ownerUserId IS NULL`, so a mislabelled self-Person could never enter
+--     that count. Entitlement was not affected.
+--   * the person switcher and dashboard, which return `origin` to the client
+--     as the record's kind. There it was simply wrong.
+--
+-- The application-side fix (auth.service.ts now passes origin: 'SELF') stops
+-- new rows being written this way. This migration repairs the ones already
+-- written.
+--
+-- Ownership is the definition, not a heuristic: a Person with a non-null
+-- ownerUserId is an account's own record. `@@unique([ownerUserId])` means at
+-- most one such row exists per account, so this cannot mislabel a dependent.
+-- DELIVERY and BABY_PROFILE rows are unclaimed by construction and are not
+-- touched; the WHERE clause excludes them anyway by pinning origin = 'MANAGED'.
+--
+-- Idempotent, and identical in shape to the backfill in 20260824150000 —
+-- re-running matches nothing once applied.
+--
+-- Verification. Run both after applying; both must return 0.
+--
+--   -- No account's own record still describes itself as a dependent:
+--   SELECT COUNT(*) FROM "persons"
+--    WHERE "ownerUserId" IS NOT NULL AND "origin" <> 'SELF';
+--
+--   -- And nothing unowned was relabelled on the way past — the guard against
+--   -- this migration reaching a genuine dependent or a baby:
+--   SELECT COUNT(*) FROM "persons"
+--    WHERE "ownerUserId" IS NULL AND "origin" = 'SELF';
+--
+-- Rehearsed against a seeded before-state of two mislabelled self-Persons, one
+-- unclaimed MANAGED dependent and one BABY_PROFILE: the two were corrected,
+-- the other two were untouched, and both queries returned 0.
+--
+-- Rollback:
+--   UPDATE "persons" SET "origin" = 'MANAGED'
+--    WHERE "ownerUserId" IS NOT NULL AND "origin" = 'SELF';
+-- Safe but not advisable: it would restore rows this migration did not create,
+-- namely the ones 20260824150000 already corrected. `origin` drives no
+-- authorization and no entitlement arithmetic, so leaving this applied is the
+-- correct response to a partial rollback of the surrounding release.
+
+UPDATE "persons"
+   SET "origin" = 'SELF'
+ WHERE "ownerUserId" IS NOT NULL
+   AND "origin" = 'MANAGED';

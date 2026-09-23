@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { env } from '@/config/env';
 import { redisConnection } from '@/lib/redis';
 import {
   QUEUE_NAMES,
@@ -6,10 +7,12 @@ import {
   SendVerificationEmailPayload,
   SendPasswordResetEmailPayload,
   SendMedicationFallbackEmailPayload,
+  SendPersonInvitationEmailPayload,
 } from '@/queues/queue.registry';
 import { emailService } from '@/providers/email/email.service';
 import { outboxRepository } from '@/modules/outbox/outbox.repository';
 import { prisma } from '@/lib/prisma';
+import { recipientResolver } from '@/modules/care/recipient.resolver';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('notifications-worker');
@@ -97,22 +100,85 @@ export const notificationsWorker = new Worker(
         break;
       }
 
+      case JOB_NAMES.SEND_PERSON_INVITATION_EMAIL: {
+        const payload = job.data as SendPersonInvitationEmailPayload;
+
+        // The address travels in the payload and is not re-resolved. Unlike a
+        // reminder, an invitation is addressed to the *address* rather than to
+        // whoever holds an account: there may be no account behind it at all,
+        // and the token in the link is scoped to this address. Re-resolving
+        // would either find nobody or, worse, find whoever has since taken the
+        // address over.
+        await emailService.sendPersonInvitationEmail({
+          to: payload.email,
+          acceptUrl: payload.acceptUrl,
+          recordName: payload.personDisplayName,
+          inviterName: payload.inviterName,
+          hasAccount: payload.hasAccount,
+        });
+
+        await outboxRepository.markProcessed(payload.outboxEventId);
+
+        log.info('Person invitation email sent', { jobId: job.id });
+        break;
+      }
+
       case JOB_NAMES.SEND_MEDICATION_FALLBACK_EMAIL: {
         const payload = job.data as SendMedicationFallbackEmailPayload & {
           outboxEventId: string;
         };
 
-        await emailService.sendMedicationFallbackEmail({
-          to: payload.email,
-          medicationName: payload.medicationName,
-          scheduledFor: payload.scheduledFor,
-        });
+        // Resolve the address now. An email snapshot taken at enqueue goes
+        // stale exactly as a userId does — the account may have been erased
+        // since, which frees the address for someone else entirely.
+        // `payload.userId`/`payload.email` drain the pre-change shape.
+        const recipients = await recipientResolver.forPerson(
+          payload.personId,
+          payload.userId,
+        );
+
+        const to = recipients[0]?.email ?? payload.email;
+
+        if (!to) {
+          log.error('Medication fallback email has no eligible recipient', {
+            jobId: job.id,
+            reminderId: payload.reminderId,
+            personId: payload.personId ?? null,
+          });
+          // Processed, not retried: retrying resolves to nobody again.
+          await outboxRepository.markProcessed(payload.outboxEventId);
+          break;
+        }
+
+        // Medication keeps the email it always had, word for word. Anything
+        // else — an ANC visit, a baby vaccination — gets the neutral care
+        // template, because telling someone to "take" their antenatal
+        // appointment would be nonsense.
+        //
+        // A job with no eventType predates the fallback covering more than
+        // medication, so it is medication by construction.
+        const isMedication = !payload.eventType || payload.eventType === 'MEDICATION_DOSE';
+
+        if (isMedication) {
+          await emailService.sendMedicationFallbackEmail({
+            to,
+            medicationName: payload.medicationName,
+            scheduledFor: payload.scheduledFor,
+          });
+        } else {
+          await emailService.sendCareReminderFallbackEmail({
+            to,
+            title: payload.title ?? 'You have a care event due',
+            scheduledFor: payload.scheduledFor,
+          });
+        }
 
         await outboxRepository.markProcessed(payload.outboxEventId);
 
-        log.info('Medication fallback email job complete', {
+        log.info('Fallback email job complete', {
           jobId: job.id,
           reminderId: payload.reminderId,
+          eventType: payload.eventType ?? 'MEDICATION_DOSE',
         });
         break;
       }
@@ -124,7 +190,7 @@ export const notificationsWorker = new Worker(
   },
   {
     connection: redisConnection,
-    concurrency: 5,
+    concurrency: env.WORKER_CONCURRENCY_NOTIFICATIONS,
   },
 );
 

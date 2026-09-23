@@ -1,35 +1,188 @@
+# Local development stack for vitals-backend.
+#
+# Ports and credentials here are taken from .env and must stay in step with it:
+#   DATABASE_URL=postgresql://postgres:local@localhost:5433/vitals
+#
+# Postgres is published on 5433, not 5432, to avoid colliding with any
+# Postgres already installed on the host. Inside the compose network the
+# container still listens on 5432.
+#
+#   docker compose up -d                    start Postgres and Redis only
+#   docker compose --profile app up -d      …plus the API and the web app
+#   docker compose down                     stop, keeping data
+#   docker compose down -v                  stop and destroy the database volume
+#
+# The API and web app sit behind the `app` profile deliberately, so the bare
+# `docker compose up -d` keeps meaning exactly what it always did: infrastructure
+# for a host-run `npm run dev`. The README and `npm run test:db:up` both depend
+# on that, and quietly starting two more containers would break the fast loop
+# everyone actually develops in.
+#
+# See the "Local development stack" section of README.md.
+
+name: vitals-local
+
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
+    container_name: vitals-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: vitals
-      POSTGRES_PASSWORD: vitals_local
-      POSTGRES_DB: vitals_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: vitals
     ports:
-      - '127.0.0.1:5432:5432'
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - vitals-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U vitals -d vitals_dev']
+      # Gates `docker compose up --wait` so migrations never race the server's
+      # first-boot initialisation.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vitals"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
+    container_name: vitals-redis
     restart: unless-stopped
-    command: ['redis-server', '--requirepass', 'vitals_local', '--save', '60', '1']
     ports:
-      - '127.0.0.1:6379:6379'
-    volumes:
-      - redis_data:/data
+      - "6379:6379"
+    # No password and no TLS: this is a loopback-only development instance.
+    # Persistence is off on purpose — dropping queued jobs between restarts is
+    # the behaviour you want locally, and only Postgres is asked to survive.
+    command: ["redis-server", "--appendonly", "no"]
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', 'vitals_local', 'ping']
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Database-backed integration tests. Started on demand, never by a bare
+  # `docker compose up` — it sits behind the "test" profile:
+  #
+  #   docker compose --profile test up -d --wait postgres-test
+  #
+  # Data lives in tmpfs, so it is fast and every container restart is a clean
+  # slate. Nothing here is persisted on purpose: the suite truncates between
+  # tests and re-applies migrations on start.
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: vitals-postgres-test
+    profiles: ["test"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: vitals_test
+      # Safe here and nowhere else — durability buys nothing for disposable data.
+      PGDATA: /var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    ports:
+      - "5436:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vitals_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # ── Whole stack, for testing rather than developing ───────────────────
+  #
+  # `--profile app` runs the API and the web app in containers alongside the
+  # database. Slower to iterate on than `npm run dev` — every change needs a
+  # rebuild — so it earns its keep for the things the host loop cannot show
+  # you: the production frontend build, the same-origin `/api` proxy, cookie
+  # auth over that proxy, and the worker running beside the API the way the
+  # deployed container does.
+
+  backend:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: vitals-backend-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    # .env supplies the secrets and third-party keys; the block below overrides
+    # everything that has to differ inside the compose network. `environment`
+    # wins over `env_file`, so the host-facing values in .env — localhost:5433,
+    # localhost:6379 — are replaced rather than fought with.
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      # Service names on the compose network, and the container's own port —
+      # 5432, not the 5433 the host sees.
+      DATABASE_URL: postgresql://postgres:local@postgres:5432/vitals
+      DIRECT_URL: postgresql://postgres:local@postgres:5432/vitals
+      UPSTASH_REDIS_URL: redis://redis:6379
+
+      # Where the browser reaches the web app. Auth requests carry
+      # `X-Auth-Transport: cookie`, and the backend refuses one whose Origin is
+      # not listed here — so these two must match the address you actually open.
+      FRONTEND_URL: http://localhost:8080
+      #
+      # 8080 is the containerised web app. 5173 and 4173 are Vite's dev and
+      # preview servers, listed so a host-run frontend can talk to this backend
+      # without editing compose — the fast loop, where the frontend reloads on
+      # save and only the API is containerised. Without them that combination
+      # answers 403 with nothing obviously wrong.
+      CORS_ORIGIN: http://localhost:8080,http://localhost:5173,http://localhost:4173
+
+      # The browser talks to the API through the frontend's proxy, so the API's
+      # own public address is that same origin.
+      API_URL: http://localhost:8080
+    # Migrations first, then the app. `prisma` is a runtime dependency here, not
+    # a dev one, so the CLI exists in the production image and this needs no
+    # separate migrate container.
+    command: >
+      sh -c "npx prisma migrate deploy &&
+             node -r module-alias/register dist/main.js"
+    healthcheck:
+      # 127.0.0.1, not localhost. The container resolves `localhost` to both
+      # 127.0.0.1 and ::1, busybox wget tries the IPv6 address first, and the
+      # server binds 0.0.0.0 — IPv4 only. Against `localhost` this check fails
+      # with "connection refused" on a perfectly healthy API.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/v1/health || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 30s
+
+  frontend:
+    profiles: ["app"]
+    build:
+      # The frontend is a separate repository, checked out beside this one.
+      # If yours lives elsewhere, point this at it.
+      context: ../vitals-frontend
+    container_name: vitals-frontend-app
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # 8080 rather than 80 so it needs no privileges and cannot collide with
+      # anything already serving http on the host.
+      - "8080:80"
 
 volumes:
-  postgres_data:
-  redis_data:
+  vitals-pgdata:
+    name: vitals-pgdata

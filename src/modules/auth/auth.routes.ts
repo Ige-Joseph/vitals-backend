@@ -2,8 +2,13 @@ import { Router } from 'express';
 import { authController } from './auth.controller';
 import { authenticate } from '@/middleware/auth.middleware';
 import { authRateLimiter } from '@/middleware/rate-limit.middleware';
+import googleAuthRoutes from './google-auth.routes';
 
 const router = Router();
+
+// Federated sign-in. Mounted first so /auth/google and /auth/google/callback
+// resolve before any parameterised route below could shadow them.
+router.use('/google', googleAuthRoutes);
 
 /**
  * @swagger

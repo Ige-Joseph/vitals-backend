@@ -2,6 +2,9 @@ import { prisma } from '@/lib/prisma';
 import { AppError } from '@/lib/errors';
 import { careRepository } from '@/modules/care/care.repository';
 import { careService } from '@/modules/care/care.service';
+import { personAccess } from '@/modules/person/person.access';
+import { personService } from '@/modules/person/person.service';
+import { personRepository } from '@/modules/person/person.repository';
 import { motherBabyRepository } from './mother-baby.repository';
 import {
   getWeekFromLMP,
@@ -37,6 +40,9 @@ export const motherBabyService = {
     userId: string,
     input: { lmpDate?: string; pregnancyWeekAtSetup?: number },
   ) {
+    // Starting a pregnancy is a write on the mother's own record.
+    const motherPersonId = await personAccess.resolveSubject(userId, undefined, 'write');
+
     const existing = await motherBabyRepository.findActivePregnancy(userId);
     if (existing) {
       throw AppError.conflict(
@@ -84,6 +90,9 @@ export const motherBabyService = {
         const carePlan = await careRepository.createCarePlan(
           {
             userId,
+            // Pregnancy describes the mother's health, so it stays on her
+            // Person. Only post-birth records move to the baby's.
+            personId: motherPersonId,
             type: 'PREGNANCY',
             title: `Pregnancy — EDD ${edd.toDateString()}`,
             metadata: { lmpDate: lmpDate.toISOString(), edd: edd.toISOString() },
@@ -108,6 +117,8 @@ export const motherBabyService = {
         await careRepository.createActivityLog(
           {
             userId,
+            personId: motherPersonId,
+            actorUserId: userId,
             type: 'PREGNANCY_STARTED',
             message: `Pregnancy timeline started at week ${currentWeek}`,
             metadata: {
@@ -152,6 +163,12 @@ export const motherBabyService = {
     const profile = await motherBabyRepository.findActivePregnancy(userId);
     if (!profile) throw AppError.notFound('No active pregnancy found');
 
+    // Bridge, not a flip. Mother & Baby is scheduled after three other
+    // modules, but it shares listCareEvents, which is now person-scoped. The
+    // subject here is the caller's own record — the module accepts no
+    // personId and its behaviour is unchanged.
+    const timelinePersonId = await personAccess.resolveSelfPersonId(userId);
+
     const currentWeek = getWeekFromLMP(profile.lmpDate);
     const trimester = getTrimester(currentWeek);
 
@@ -167,7 +184,7 @@ export const motherBabyService = {
 
     const [, upcomingANC] = await Promise.all([
       weekUpdate,
-      careRepository.listCareEvents(userId, {
+      careRepository.listCareEvents({ personId: timelinePersonId, userId }, {
         status: 'PENDING',
         type: 'ANC_VISIT',
         limit: 3,
@@ -223,6 +240,13 @@ export const motherBabyService = {
       };
     });
 
+    // A second baby consumes managed capacity like any other dependent; the
+    // first does not, because the mother-baby journey is core free
+    // functionality and the free tier is managedPersonLimit = 0.
+    if (await personRepository.hasBabyPerson(userId)) {
+      await personService.assertCanAddManagedPerson(userId);
+    }
+
     const result = await prisma.$transaction(
         async (tx: PrismaTx) => {
           const pregnancyEvents = await tx.careEvent.findMany({
@@ -239,12 +263,30 @@ export const motherBabyService = {
 
           await careRepository.updateCarePlanStatus(activePregnancy.carePlanId, 'COMPLETED', tx);
 
+          // The baby is a Person. Records describing the baby's health belong
+          // to it, not to the mother — her pregnancy plan, completed just
+          // above, keeps her own subject.
+          const babyPerson = await personService.createBabyPerson(
+            {
+              userId,
+              displayName: babyName,
+              dateOfBirth: deliveryDate,
+              origin: 'DELIVERY',
+            },
+            tx,
+          );
+
           const babyCarePlan = await careRepository.createCarePlan(
             {
               userId,
+              personId: babyPerson.id,
               type: 'VACCINATION',
               title: `${babyName} — Vaccination Schedule`,
-              metadata: { babyName, deliveryDate: deliveryDate.toISOString() },
+              metadata: {
+                babyName,
+                babyPersonId: babyPerson.id,
+                deliveryDate: deliveryDate.toISOString(),
+              },
             },
             tx,
           );
@@ -254,11 +296,14 @@ export const motherBabyService = {
           await careRepository.createActivityLog(
             {
               userId,
+              personId: babyPerson.id,
+              actorUserId: userId,
               type: 'DELIVERY_RECORDED',
               message: `Delivery recorded. Baby vaccination plan created for ${babyName}.`,
               metadata: {
                 pregnancyCarePlanId: activePregnancy.carePlanId,
                 babyCarePlanId: babyCarePlan.id,
+                babyPersonId: babyPerson.id,
                 deliveryDate: deliveryDate.toISOString(),
                 vaccinationsScheduled: vaccinationEvents.length,
               },
@@ -327,14 +372,38 @@ export const motherBabyService = {
       };
     });
 
+    // Same rule as the delivery flow. A mother who joins Vitals after giving
+    // birth reaches her first baby through this path rather than through
+    // delivery, and gating it would gate the journey for her alone — see the
+    // report, this reading is flagged for confirmation.
+    if (await personRepository.hasBabyPerson(userId)) {
+      await personService.assertCanAddManagedPerson(userId);
+    }
+
     const result = await prisma.$transaction(
       async (tx: PrismaTx) => {
+        const babyPerson = await personService.createBabyPerson(
+          {
+            userId,
+            displayName: babyName,
+            dateOfBirth: deliveryDate,
+            origin: 'BABY_PROFILE',
+          },
+          tx,
+        );
+
         const babyCarePlan = await careRepository.createCarePlan(
           {
             userId,
+            personId: babyPerson.id,
             type: 'VACCINATION',
             title: `${babyName} — Vaccination Schedule`,
-            metadata: { babyName, deliveryDate: deliveryDate.toISOString(), standalone: true },
+            metadata: {
+              babyName,
+              babyPersonId: babyPerson.id,
+              deliveryDate: deliveryDate.toISOString(),
+              standalone: true,
+            },
           },
           tx,
         );
@@ -344,10 +413,13 @@ export const motherBabyService = {
         await careRepository.createActivityLog(
           {
             userId,
+            personId: babyPerson.id,
+            actorUserId: userId,
             type: 'BABY_PROFILE_CREATED',
             message: `Baby profile created for ${babyName}`,
             metadata: {
               babyCarePlanId: babyCarePlan.id,
+              babyPersonId: babyPerson.id,
               vaccinationsScheduled: vaccinationEvents.length,
             },
           },

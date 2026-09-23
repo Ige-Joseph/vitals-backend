@@ -7,3 +7,15 @@ coverage/
 .DS_Store
 *.log
 prisma/migrations/*.sql
+
+# Production secrets. `.env` alone does not match these — it is an exact-name
+# rule, so .env.production would otherwise be committed on the first deploy.
+.env.production
+.env.*.local
+
+# Cloudflare Origin Certificate and its private key. Mounted into the edge
+# container on the VM, generated once in the Cloudflare dashboard, and never
+# in version control.
+deploy/certs/
+*.pem
+*.key

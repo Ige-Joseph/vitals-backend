@@ -65,9 +65,68 @@ const envSchema = z
     PREMIUM_SYMPTOM_CHECKS_PER_DAY: z.coerce.number().default(20),
     PREMIUM_DRUG_DETECTIONS_PER_DAY: z.coerce.number().default(20),
 
+    // Paystack. Optional: the adapter only registers when a key is present,
+    // so an environment without one simply has no provider configured.
+    PAYSTACK_SECRET_KEY: z.string().optional(),
+    PAYSTACK_BASE_URL: z.string().url().default('https://api.paystack.co'),
+    /// Failed billing events older than this are dead-lettered.
+    BILLING_EVENT_MAX_ATTEMPTS: z.coerce.number().default(5),
+
+    // Worker concurrency
+    //
+    // How many jobs each worker runs at once, in a process that also serves the
+    // API. The defaults suit a multi-core host and are deliberately unchanged;
+    // the reason they are settings at all is the 1 OCPU deployment target,
+    // where 15 concurrent job slots on one core means jobs competing with
+    // requests for the only event loop there is.
+    //
+    // Lower these together with nothing else: they do not change what runs,
+    // only how much of it runs at once.
+    WORKER_CONCURRENCY_NOTIFICATIONS: z.coerce.number().int().positive().default(5),
+    WORKER_CONCURRENCY_BILLING: z.coerce.number().int().positive().default(5),
+    WORKER_CONCURRENCY_ADHERENCE: z.coerce.number().int().positive().default(3),
+    /// Rendering is the most CPU-hungry job there is. Raising this above 1 on a
+    /// shared-process deployment is how you stall the API.
+    WORKER_CONCURRENCY_REPORTS: z.coerce.number().int().positive().default(1),
+
+    // Reports
+    //
+    // Health summaries are rendered by a worker and held as a file until the
+    // reader fetches them. Both settings bound how long one Person's whole
+    // record sits outside the tables that own it, so they are deliberately
+    // short: the document is a hand-off, not an archive.
+    //
+    // The directory is not persisted across container restarts on purpose. A
+    // lost file costs a regeneration; a file surviving a restart is a health
+    // record outliving the process that was accountable for deleting it.
+    REPORT_STORAGE_DIR: z.string().default('/tmp/vitals-reports'),
+    /// How long a rendered summary stays fetchable before the sweep deletes it.
+    REPORT_TTL_MINUTES: z.coerce.number().int().positive().default(60),
+    /// How often the sweep looks for expired documents.
+    REPORT_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(300000),
+
+    // Billing
+    // How long a failed renewal keeps Premium. Runs from the failed charge,
+    // not from the period end.
+    SUBSCRIPTION_PAST_DUE_GRACE_DAYS: z.coerce.number().default(7),
+    // How often reconciliation compares our state against the provider's.
+    BILLING_RECONCILE_INTERVAL_MS: z.coerce.number().default(3600000),
+
     // Reminder settings
     ADHERENCE_CHECK_DELAY_MS: z.coerce.number().default(1800000),
     MISSED_WINDOW_MS: z.coerce.number().default(7200000),
+
+    /**
+     * How long after an appointment has finished before it counts as missed.
+     *
+     * Measured from the end — `startsAt` plus its own duration — not from the
+     * start, because an appointment in progress has not been missed and a long
+     * one would otherwise be marked missed while the patient was still in the
+     * room. Two hours past the end, by default.
+     */
+    APPOINTMENT_MISSED_GRACE_MS: z.coerce.number().default(7200000),
+    /** How often the sweep runs. */
+    APPOINTMENT_SWEEP_INTERVAL_MS: z.coerce.number().default(900000),
 
     // Token expiry
     EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS: z.coerce.number().default(24),
@@ -77,6 +136,29 @@ const envSchema = z
     GOOGLE_CLIENT_ID: z.string().min(1),
     GOOGLE_CLIENT_SECRET: z.string().min(1),
     GOOGLE_REDIRECT_URI: z.string().url(),
+
+    /// Where Google returns the browser after *sign-in*, which is a different
+    /// redirect from the calendar one and must be registered separately with
+    /// Google. Two reasons it cannot be shared:
+    ///
+    ///  1. The two callbacks do different things. One creates a session; the
+    ///     other stores a calendar grant for a session that already exists.
+    ///  2. It must resolve through the *frontend* origin in production —
+    ///     `https://app.example/api/v1/auth/google/callback` — so that the
+    ///     Set-Cookie on the refresh cookie is first-party. Pointing it at the
+    ///     API host instead sets the cookie on a domain the app never calls
+    ///     directly, and the session silently fails to survive the redirect.
+    ///     See docs/API_TRANSPORT.md in vitals-frontend.
+    ///
+    /// Optional so that an existing deployment that has not registered the
+    /// second redirect keeps booting; sign-in reports itself unavailable
+    /// rather than the process refusing to start.
+    GOOGLE_AUTH_REDIRECT_URI: z.string().url().optional(),
+
+    /// OAuth client ids issued for the native Android and iOS applications.
+    /// Comma-separated because Google gives each platform its own audience.
+    /// The web client id remains accepted for development and Expo web.
+    GOOGLE_MOBILE_CLIENT_IDS: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const hasUpstashUrl = !!data.UPSTASH_REDIS_URL;

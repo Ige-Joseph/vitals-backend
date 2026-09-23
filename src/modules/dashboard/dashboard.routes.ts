@@ -102,7 +102,10 @@ router.use(authenticate);
  */
 router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const data = await dashboardService.getDashboard(req.user!.sub);
+    const data = await dashboardService.getDashboard(
+      req.user!.sub,
+      req.query.personId as string | undefined,
+    );
     return ok(res, data, 'Dashboard retrieved');
   } catch (err) {
     next(err);

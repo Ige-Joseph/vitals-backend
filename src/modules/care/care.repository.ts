@@ -1,12 +1,58 @@
 import { prisma } from '@/lib/prisma';
 import type { PrismaTx } from '@/types/prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma, type $Enums } from '@prisma/client';
 
 export type CareEventStatusFilter = 'PENDING' | 'DONE' | 'SKIPPED' | 'MISSED';
-export type CarePlanType = 'MEDICATION' | 'PREGNANCY' | 'VACCINATION';
+
+/**
+ * The subject a clinical query is scoped to. `personId` is required, not
+ * optional — that is the whole point. Authorization happens before this via
+ * assertPersonAccess; this type stops a scoped query being written unscoped.
+ *
+ * `userId` is the compatibility window, not a second authorization path. Rows
+ * written before their module started dual-writing have `personId = NULL`, and
+ * a strict person-only filter would make them silently disappear. Including
+ * the account lets exactly those rows through — never a row that already
+ * carries a different subject. It comes out when personId is NOT NULL.
+ */
+export interface PersonScope {
+  personId: string;
+  userId?: string;
+}
+
+/**
+ * Scope for leaf clinical logs that carry their own personId. Same
+ * compatibility window as carePlanScope: the subject's rows, plus rows not
+ * yet backfilled that belong to the account — never a row already carrying a
+ * different subject.
+ */
+export const personLogScope = (scope: PersonScope) => ({
+  OR: [
+    { personId: scope.personId },
+    ...(scope.userId ? [{ personId: null, userId: scope.userId }] : []),
+  ],
+});
+
+/** Matches the subject's rows, plus not-yet-backfilled rows of the account. */
+export const carePlanScope = (scope: PersonScope) => ({
+  OR: [
+    { personId: scope.personId },
+    ...(scope.userId ? [{ personId: null, userId: scope.userId }] : []),
+  ],
+});
+/// Derived from the schema rather than restated here.
+///
+/// This was a hand-written literal union and it had already drifted: adding
+/// APPOINTMENT to the Prisma enum left this one a value short, and the only
+/// thing that noticed was a compile error in an unrelated module. Deriving it
+/// keeps the narrowing every caller here depends on while making a future
+/// drift impossible — a new value in the schema is a new value here.
+export type CarePlanType = $Enums.CarePlanType;
 
 export interface CreateCarePlanInput {
   userId: string;
+  /** The subject. Dual-written alongside userId during the compatibility window. */
+  personId?: string;
   type: CarePlanType;
   title: string;
   metadata?: Prisma.InputJsonValue;
@@ -98,8 +144,17 @@ export const careRepository = {
     });
   },
 
+  /**
+   * Repository convention: a clinical query is never written without a person
+   * scope. `PersonScope` makes that structural — the caller cannot express a
+   * query for "everyone's care events" by accident, because there is no
+   * overload that omits the subject.
+   *
+   * `userId` is still accepted alongside for the compatibility window. It is
+   * not the authorization boundary any more; personId is.
+   */
   listCareEvents(
-    userId: string,
+    scope: PersonScope,
     filters: {
       status?: CareEventStatusFilter;
       type?: string;
@@ -110,7 +165,7 @@ export const careRepository = {
   ) {
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId, status: 'ACTIVE' },
+        carePlan: { ...carePlanScope(scope), status: 'ACTIVE' },
         ...(filters.status && { status: filters.status }),
         ...(filters.type && { eventType: filters.type }),
         ...(filters.from || filters.to
@@ -137,7 +192,7 @@ export const careRepository = {
     return client.careEvent.update({ where: { id }, data: { status } });
   },
 
-  getTodayCareEvents(userId: string) {
+  getTodayCareEvents(scope: PersonScope) {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     const end = new Date();
@@ -145,7 +200,7 @@ export const careRepository = {
 
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId, status: 'ACTIVE' },
+        carePlan: { ...carePlanScope(scope), status: 'ACTIVE' },
         scheduledFor: { gte: start, lte: end },
       },
       orderBy: { scheduledFor: 'asc' },
@@ -153,10 +208,10 @@ export const careRepository = {
     });
   },
 
-  getUpcomingCareEvents(userId: string, limit = 5) {
+  getUpcomingCareEvents(scope: PersonScope, limit = 5) {
     return prisma.careEvent.findMany({
       where: {
-        carePlan: { userId, status: 'ACTIVE' },
+        carePlan: { ...carePlanScope(scope), status: 'ACTIVE' },
         scheduledFor: { gt: new Date() },
         status: 'PENDING',
       },
@@ -256,6 +311,7 @@ export const careRepository = {
     status: 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELLED',
     tx?: PrismaTx,
     errorMessage?: string,
+    extra?: { adherenceCheckDueAt?: Date },
   ) {
     const client = tx ?? prisma;
 
@@ -279,23 +335,52 @@ export const careRepository = {
               errorMessage: null,
             }
           : {}),
+        ...(extra?.adherenceCheckDueAt
+          ? { adherenceCheckDueAt: extra.adherenceCheckDueAt }
+          : {}),
       },
+    });
+  },
+
+  findDueAdherenceChecks(now = new Date(), limit = 50) {
+    const graceCutoff = new Date(now.getTime() - 2 * 60 * 1000);
+    const lookbackCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    return prisma.reminder.findMany({
+      where: {
+        status: 'SENT',
+        adherenceCheckProcessedAt: null,
+        adherenceCheckDueAt: {
+          lte: graceCutoff,
+          gte: lookbackCutoff,
+        },
+      },
+      orderBy: { adherenceCheckDueAt: 'asc' },
+      take: limit,
+      select: { id: true, adherenceCheckDueAt: true },
     });
   },
 
   // ─── Activity Log ──────────────────────────────────────────────────────
 
   createActivityLog(
-    data: { userId: string; type: string; message: string; metadata?: Prisma.InputJsonValue; },
+    data: {
+      userId: string;
+      personId?: string;
+      actorUserId?: string;
+      type: string;
+      message: string;
+      metadata?: Prisma.InputJsonValue;
+    },
     tx?: PrismaTx,
   ) {
     const client = tx ?? prisma;
     return client.activityLog.create({ data });
   },
 
-  getRecentActivity(userId: string, limit = 10) {
+  getRecentActivity(scope: PersonScope, limit = 10) {
     return prisma.activityLog.findMany({
-      where: { userId },
+      where: personLogScope(scope),
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -303,11 +388,11 @@ export const careRepository = {
 
 
 
-  listEventsByCarePlan(carePlanId: string, userId: string) {
+  listEventsByCarePlan(carePlanId: string, scope: PersonScope) {
   return prisma.careEvent.findMany({
     where: {
       carePlanId,
-      carePlan: { userId },
+      carePlan: carePlanScope(scope),
     },
     orderBy: { scheduledFor: 'desc' },
     include: {

@@ -40,6 +40,18 @@ export class AppError extends Error {
     return new AppError(message, 409, 'CONFLICT');
   }
 
+  /**
+   * The thing existed and deliberately does not any more.
+   *
+   * Distinct from notFound on purpose: a client seeing 410 knows the request
+   * was valid and that asking again for a fresh one will work, which is not
+   * true of 404. Health summaries expire by design, and telling a reader
+   * "not found" would read as an error rather than as the timer working.
+   */
+  static gone(message: string) {
+    return new AppError(message, 410, 'GONE');
+  }
+
   static validation(message: string) {
     return new AppError(message, 422, 'VALIDATION_ERROR');
   }
