@@ -10,6 +10,29 @@ export interface PushPayload {
   url?: string;
 }
 
+const toFrontendNotificationUrl = (route: string | undefined): string => {
+  const frontend = new URL(env.FRONTEND_URL);
+  if (frontend.protocol !== 'https:' || frontend.username || frontend.password) {
+    throw new Error('FRONTEND_URL must be an HTTPS URL without credentials for FCM links');
+  }
+
+  const frontendRoot = new URL('/', frontend.origin);
+  if (!route || !route.startsWith('/') || route.startsWith('//')) {
+    return frontendRoot.href;
+  }
+
+  try {
+    const target = new URL(route, frontendRoot);
+    if (target.protocol !== 'https:' || target.origin !== frontendRoot.origin) {
+      return frontendRoot.href;
+    }
+
+    return target.href;
+  } catch {
+    return frontendRoot.href;
+  }
+};
+
 /**
  * FCM push provider — sends notifications via Firebase Admin SDK.
  * Replaces the previous web-push/VAPID stub.
@@ -44,7 +67,7 @@ export const pushProvider = {
           },
           fcmOptions: {
             // Deep-link into the app when notification is tapped
-            link: payload.url ?? '/',
+            link: toFrontendNotificationUrl(payload.url),
           },
         },
       });
