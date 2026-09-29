@@ -64,13 +64,14 @@ const postWebhook = (body: unknown) => {
 
 describe('translating Paystack into our vocabulary', () => {
   it('reads a first charge, including the metadata that is our only link to it', () => {
-    const event = adapter.parseEvent(raw(fx.chargeSuccess({ subscriptionId: 'sub-local-1' })))!;
+    const charge = fx.chargeSuccess({ subscriptionId: 'sub-local-1' });
+    const event = adapter.parseEvent(raw(charge))!;
 
     expect(event.type).toBe('charge.succeeded');
     // Derived, because Paystack sends no event id at all. Keyed on the
     // transaction's own primary key, which never moves.
     expect(event.providerEventId).toBe('charge.success:302961');
-    expect(event.occurredAt.toISOString()).toBe('2026-08-25T10:15:00.000Z');
+    expect(event.occurredAt.toISOString()).toBe(charge.data.paid_at);
     expect(event.payload).toMatchObject({
       providerReference: 'vitals-abc-1',
       providerCustomerRef: fx.CUSTOMER_CODE,
@@ -95,14 +96,15 @@ describe('translating Paystack into our vocabulary', () => {
   });
 
   it('reads the subscription Paystack created for itself', () => {
-    const event = adapter.parseEvent(raw(fx.subscriptionCreate()))!;
+    const subscription = fx.subscriptionCreate();
+    const event = adapter.parseEvent(raw(subscription))!;
 
     expect(event.type).toBe('subscription.activated');
     expect(event.payload).toMatchObject({
       providerSubscriptionId: fx.SUB_CODE,
       providerCustomerRef: fx.CUSTOMER_CODE,
       providerPriceId: fx.PLAN_CODE,
-      currentPeriodEnd: '2026-09-25T10:15:00.000Z',
+      currentPeriodEnd: subscription.data.next_payment_date,
     });
     // Captured wherever it appears: the event that grants this token is not
     // the event that will need it.

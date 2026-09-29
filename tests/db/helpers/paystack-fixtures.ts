@@ -68,43 +68,49 @@ export const chargeSuccess = (overrides: {
   transactionId?: number;
   amount?: number;
   paidAt?: string;
-} = {}) => ({
-  event: 'charge.success',
-  data: {
-    id: overrides.transactionId ?? 302961,
-    domain: 'test',
-    status: 'success',
-    reference: overrides.reference ?? 'vitals-abc-1',
-    amount: overrides.amount ?? 100_000,
-    message: null,
-    gateway_response: 'Successful',
-    paid_at: overrides.paidAt ?? '2026-08-25T10:15:00.000Z',
-    created_at: overrides.paidAt ?? '2026-08-25T10:14:52.000Z',
-    channel: 'card',
-    currency: 'NGN',
-    ip_address: '102.89.34.7',
-    metadata: overrides.subscriptionId
-      ? {
-          subscriptionId: overrides.subscriptionId,
-          userId: 'ignored-by-us',
-          priceId: 'premium-monthly-2026-08',
-          custom_fields: [
-            {
-              display_name: 'Vitals subscription',
-              variable_name: 'vitals_subscription_id',
-              value: overrides.subscriptionId,
-            },
-          ],
-        }
-      : // Paystack returns the integer zero, not null and not {}, when no
-        // metadata was sent. A property access on it throws.
-        0,
-    fees: 1_500,
-    customer,
-    authorization,
-    plan,
-  },
-});
+} = {}) => {
+  // Keep the paid period valid regardless of when this fixture is used.
+  const paidAt = overrides.paidAt ?? new Date().toISOString();
+
+  return {
+    event: 'charge.success',
+    data: {
+      id: overrides.transactionId ?? 302961,
+      domain: 'test',
+      status: 'success',
+      reference: overrides.reference ?? 'vitals-abc-1',
+      amount: overrides.amount ?? 100_000,
+      message: null,
+      gateway_response: 'Successful',
+      paid_at: paidAt,
+      created_at:
+        overrides.paidAt ?? new Date(new Date(paidAt).getTime() - 8_000).toISOString(),
+      channel: 'card',
+      currency: 'NGN',
+      ip_address: '102.89.34.7',
+      metadata: overrides.subscriptionId
+        ? {
+            subscriptionId: overrides.subscriptionId,
+            userId: 'ignored-by-us',
+            priceId: 'premium-monthly-2026-08',
+            custom_fields: [
+              {
+                display_name: 'Vitals subscription',
+                variable_name: 'vitals_subscription_id',
+                value: overrides.subscriptionId,
+              },
+            ],
+          }
+        : // Paystack returns the integer zero, not null and not {}, when no
+          // metadata was sent. A property access on it throws.
+          0,
+      fees: 1_500,
+      customer,
+      authorization,
+      plan,
+    },
+  };
+};
 
 /** A charge that is not for a plan: `plan` comes back as an empty object. */
 export const chargeSuccessNoPlan = () => ({
@@ -122,24 +128,30 @@ export const chargeSuccessNoPlan = () => ({
  * Paystack announcing a subscription it created itself, off the back of the
  * charge above. Note there is nothing in here connecting it to that charge.
  */
-export const subscriptionCreate = (overrides: { code?: string; customerCode?: string } = {}) => ({
-  event: 'subscription.create',
-  data: {
-    domain: 'test',
-    status: 'active',
-    subscription_code: overrides.code ?? SUB_CODE,
-    email_token: EMAIL_TOKEN,
-    amount: 100_000,
-    cron_expression: '0 0 25 * *',
-    next_payment_date: '2026-09-25T10:15:00.000Z',
-    open_invoice: null,
-    createdAt: '2026-08-25T10:15:03.000Z',
-    created_at: '2026-08-25T10:15:03.000Z',
-    plan,
-    authorization,
-    customer: { ...customer, customer_code: overrides.customerCode ?? CUSTOMER_CODE },
-  },
-});
+export const subscriptionCreate = (overrides: { code?: string; customerCode?: string } = {}) => {
+  const createdAt = new Date();
+  const nextPaymentDate = new Date(createdAt);
+  nextPaymentDate.setUTCMonth(nextPaymentDate.getUTCMonth() + 1);
+
+  return {
+    event: 'subscription.create',
+    data: {
+      domain: 'test',
+      status: 'active',
+      subscription_code: overrides.code ?? SUB_CODE,
+      email_token: EMAIL_TOKEN,
+      amount: 100_000,
+      cron_expression: '0 0 25 * *',
+      next_payment_date: nextPaymentDate.toISOString(),
+      open_invoice: null,
+      createdAt: createdAt.toISOString(),
+      created_at: createdAt.toISOString(),
+      plan,
+      authorization,
+      customer: { ...customer, customer_code: overrides.customerCode ?? CUSTOMER_CODE },
+    },
+  };
+};
 
 /**
  * A renewal. The one payload that states a billing period outright.
